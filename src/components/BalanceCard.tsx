@@ -1,8 +1,6 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { MemberBalance, Settlement } from '../types';
 import { formatCurrency } from '../utils/balances';
-import { useApp } from '../context/AppContext';
 
 interface BalanceCardProps {
   balance: MemberBalance;
@@ -17,26 +15,11 @@ export function BalanceCard({
   isCurrentUser = false,
   suggestedSettlement,
 }: BalanceCardProps) {
-  const { removeMember } = useApp();
-  const [deleting, setDeleting] = useState(false);
   const signedPositive = balance.signedBalance > 0.01;
   const signedNegative = balance.signedBalance < -0.01;
   const signedSettled = !signedPositive && !signedNegative;
 
   const hasPendingBalance = Math.abs(balance.pendingBalance) > 0.01;
-
-  // Can delete if both signed and pending balances are 0
-  const canDelete = !isCurrentUser && signedSettled && !hasPendingBalance;
-
-  const handleDelete = async () => {
-    if (!confirm(`Remove ${balance.memberName} from the group?`)) return;
-    setDeleting(true);
-    try {
-      await removeMember(balance.memberId);
-    } finally {
-      setDeleting(false);
-    }
-  };
 
   return (
     <div
@@ -80,15 +63,6 @@ export function BalanceCard({
             >
               Settle
             </Link>
-          )}
-          {canDelete && (
-            <button
-              onClick={handleDelete}
-              disabled={deleting}
-              className="text-sm bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 disabled:opacity-50"
-            >
-              {deleting ? 'Removing...' : 'Remove User'}
-            </button>
           )}
         </div>
       </div>
