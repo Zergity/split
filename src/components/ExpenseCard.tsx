@@ -62,9 +62,12 @@ export function ExpenseCard({
   // Payer can edit/delete, creator can also edit (to assign items)
   const isPayer = currentUser && currentUser.id === expense.paidBy;
   const isCreator = currentUser && currentUser.id === expense.createdBy;
-  const isParticipant = currentUser && expense.items?.some(item => item.memberId === currentUser.id);
-  const canEdit = isPayer || isCreator || isParticipant;
+  const isParticipantInSplits = currentUser && expense.splits.some(s => s.memberId === currentUser.id);
+  const isParticipantInItems = currentUser && expense.items?.some(item => item.memberId === currentUser.id);
+  const isParticipant = isPayer || isCreator || isParticipantInSplits || isParticipantInItems;
+  const canEdit = isParticipant;
   const canDelete = isPayer; // Only payer can delete
+  const canEditTags = isParticipant;
 
   return (
     <div className={`bg-gray-800 rounded-lg shadow-sm border ${isSettlement ? 'border-green-700' : 'border-gray-700'} p-4 ${expenseDeleted ? 'opacity-60' : ''}`}>
@@ -124,7 +127,7 @@ export function ExpenseCard({
           {!isSettlement && <div className="flex flex-wrap items-center gap-1 mt-1">
             {expense.tags?.filter((t) => t !== 'deleted').map((tag) => {
               const color = getTagColor(tag);
-              return (
+              return canEditTags ? (
                 <button
                   key={tag}
                   onClick={async () => {
@@ -136,9 +139,16 @@ export function ExpenseCard({
                 >
                   {tag} ×
                 </button>
+              ) : (
+                <span
+                  key={tag}
+                  className={`text-xs px-2 py-0.5 rounded-full ${color.bg} ${color.text}`}
+                >
+                  {tag}
+                </span>
               );
             })}
-            {currentUser && !editingTags && (
+            {canEditTags && !editingTags && (
               <button
                 onClick={() => setEditingTags(true)}
                 className="text-xs text-gray-500 hover:text-gray-300"
