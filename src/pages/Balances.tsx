@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { BalanceCard } from '../components/BalanceCard';
@@ -5,6 +6,7 @@ import { calculateBalances, calculateSettlements, formatCurrency } from '../util
 
 export function Balances() {
   const { group, expenses, currentUser } = useApp();
+  const [suggestionsCollapsed, setSuggestionsCollapsed] = useState(true);
 
   if (!group) return null;
 
@@ -43,7 +45,23 @@ export function Balances() {
 
       <section>
         <div className="flex justify-between items-center mb-4">
-          <h2 className="text-xl font-bold">Settlement Suggestions</h2>
+          <button
+            onClick={() => setSuggestionsCollapsed(!suggestionsCollapsed)}
+            className="flex items-center gap-2 text-xl font-bold hover:text-gray-300"
+          >
+            <svg
+              className={`w-5 h-5 transition-transform ${suggestionsCollapsed ? '' : 'rotate-90'}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+            Settlement Suggestions
+            {settlements.length > 0 && (
+              <span className="text-sm font-normal text-gray-400">({settlements.length})</span>
+            )}
+          </button>
           <Link
             to="/settle"
             className="text-sm text-cyan-400 hover:text-cyan-300"
@@ -52,48 +70,52 @@ export function Balances() {
           </Link>
         </div>
 
-        {settlements.length === 0 ? (
-          <div className="bg-green-900/30 border border-green-700 rounded-lg p-4 text-center">
-            <p className="text-green-200">Everyone is settled up!</p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {settlements.map((settlement, index) => (
-              <div
-                key={index}
-                className="bg-gray-800 rounded-lg border border-gray-700 p-3 flex items-center justify-between gap-2"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span
-                    className={`font-medium truncate ${
-                      settlement.from === currentUser?.id ? 'text-yellow-400' : ''
-                    }`}
-                  >
-                    {settlement.from === currentUser?.id ? `[${settlement.fromName}]` : settlement.fromName}
-                  </span>
-                  <span className="text-gray-500 flex-shrink-0">→</span>
-                  <span
-                    className={`font-medium truncate ${
-                      settlement.to === currentUser?.id ? 'text-yellow-400' : ''
-                    }`}
-                  >
-                    {settlement.to === currentUser?.id ? `[${settlement.toName}]` : settlement.toName}
-                  </span>
-                </div>
-                <div className="flex items-center gap-3 flex-shrink-0">
-                  <span className="font-semibold">
-                    {formatCurrency(settlement.amount, group.currency)}
-                  </span>
-                  <Link
-                    to={`/settle?from=${settlement.from}&to=${settlement.to}&amount=${settlement.amount}`}
-                    className="text-sm bg-cyan-600 text-white px-3 py-1 rounded hover:bg-cyan-700"
-                  >
-                    Settle
-                  </Link>
-                </div>
+        {!suggestionsCollapsed && (
+          <>
+            {settlements.length === 0 ? (
+              <div className="bg-green-900/30 border border-green-700 rounded-lg p-4 text-center">
+                <p className="text-green-200">Everyone is settled up!</p>
               </div>
-            ))}
-          </div>
+            ) : (
+              <div className="space-y-3">
+                {settlements.map((settlement, index) => (
+                  <div
+                    key={index}
+                    className="bg-gray-800 rounded-lg border border-gray-700 p-3 flex items-center justify-between gap-2"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className={`font-medium truncate ${
+                          settlement.from === currentUser?.id ? 'text-yellow-400' : ''
+                        }`}
+                      >
+                        {settlement.from === currentUser?.id ? `[${settlement.fromName}]` : settlement.fromName}
+                      </span>
+                      <span className="text-gray-500 flex-shrink-0">→</span>
+                      <span
+                        className={`font-medium truncate ${
+                          settlement.to === currentUser?.id ? 'text-yellow-400' : ''
+                        }`}
+                      >
+                        {settlement.to === currentUser?.id ? `[${settlement.toName}]` : settlement.toName}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3 flex-shrink-0">
+                      <span className="font-semibold">
+                        {formatCurrency(settlement.amount, group.currency)}
+                      </span>
+                      <Link
+                        to={`/settle?from=${settlement.from}&to=${settlement.to}&amount=${settlement.amount}`}
+                        className="text-sm bg-cyan-600 text-white px-3 py-1 rounded hover:bg-cyan-700"
+                      >
+                        Settle
+                      </Link>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </section>
 
