@@ -1,4 +1,5 @@
 import { Group, Expense, ApiResponse, ReceiptOCRResult } from '../types';
+import type { Member } from '../types';
 
 const API_BASE = '/api';
 
@@ -119,6 +120,14 @@ export async function signOffExpense(
   });
 
   return updateExpense(expense.id, { splits: updatedSplits });
+}
+
+// Profile API
+export async function updateProfile(updates: Partial<Member>): Promise<Member> {
+  return fetchApi<Member>('/auth/profile', {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  });
 }
 
 // Claim/unclaim expense item helper

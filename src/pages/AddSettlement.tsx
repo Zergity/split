@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { formatCurrency, roundNumber } from '../utils/balances';
+import { PaymentModal } from '../components/PaymentModal';
 
 export function AddSettlement() {
   const navigate = useNavigate();
@@ -13,6 +14,7 @@ export function AddSettlement() {
   const [amount, setAmount] = useState(searchParams.get('amount') || '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
 
   // Set default from member to current user if not specified
   useEffect(() => {
@@ -26,6 +28,11 @@ export function AddSettlement() {
   const fromMember = group.members.find((m) => m.id === fromMemberId);
   const toMember = group.members.find((m) => m.id === toMemberId);
   const parsedAmount = parseFloat(amount) || 0;
+
+  const hasBankAccountInfo = (memberId: string): boolean => {
+    const member = group.members.find(m => m.id === memberId);
+    return !!(member?.bankId && member?.accountNo && member?.accountName);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -181,6 +188,22 @@ export function AddSettlement() {
                 {toMember.name} will need to accept to confirm receipt
               </p>
             )}
+
+            {/* Bank Transfer Button */}
+            {hasBankAccountInfo(toMemberId) && (
+              <button
+                type="button"
+                onClick={() => setShowPaymentModal(true)}
+                className="mt-4 w-full bg-gray-700 text-white py-2 rounded-lg font-medium hover:bg-gray-600"
+              >
+                Pay via Bank Transfer (VietQR)
+              </button>
+            )}
+            {!hasBankAccountInfo(toMemberId) && (
+              <p className="text-xs text-gray-500 mt-3">
+                {toMember.name} hasn't set up bank account for VietQR transfers
+              </p>
+            )}
           </div>
         )}
 
@@ -198,6 +221,18 @@ export function AddSettlement() {
           {submitting ? 'Recording...' : 'Record Settlement'}
         </button>
       </form>
+
+      {/* Payment Modal */}
+      {showPaymentModal && fromMember && toMember && parsedAmount > 0 && (
+        <PaymentModal
+          isOpen={showPaymentModal}
+          recipient={toMember}
+          payer={fromMember}
+          amount={parsedAmount}
+          currency={group.currency}
+          onClose={() => setShowPaymentModal(false)}
+        />
+      )}
     </div>
   );
 }

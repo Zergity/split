@@ -5,6 +5,12 @@ interface Env {
 interface Member {
   id: string;
   name: string;
+  // Optional bank account fields
+  bankId?: string;
+  bankName?: string;
+  bankShortName?: string;
+  accountName?: string;
+  accountNo?: string;
 }
 
 interface Group {

@@ -2,6 +2,21 @@
 export interface Member {
   id: string;
   name: string;
+  // Optional bank account fields
+  bankId?: string;
+  bankName?: string;
+  bankShortName?: string;
+  accountName?: string;
+  accountNo?: string;
+}
+
+// Bank information
+export interface Bank {
+  id: string;
+  name: string;
+  shortName: string;
+  appCode: string;
+  logo: string;
 }
 
 // The single expense group

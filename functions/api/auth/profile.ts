@@ -5,7 +5,15 @@ interface Group {
   id: string;
   name: string;
   currency: string;
-  members: { id: string; name: string }[];
+  members: {
+    id: string;
+    name: string;
+    bankId?: string;
+    bankName?: string;
+    bankShortName?: string;
+    accountName?: string;
+    accountNo?: string;
+  }[];
   createdAt: string;
 }
 
@@ -30,7 +38,21 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    const { name } = await context.request.json() as { name?: string };
+    const {
+      name,
+      bankId,
+      bankName,
+      bankShortName,
+      accountName,
+      accountNo
+    } = await context.request.json() as {
+      name?: string;
+      bankId?: string;
+      bankName?: string;
+      bankShortName?: string;
+      accountName?: string;
+      accountNo?: string;
+    };
 
     if (!name || !name.trim()) {
       return Response.json(
@@ -41,7 +63,7 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
 
     const trimmedName = name.trim();
 
-    // Get group and update member name
+    // Get group and check it exists
     const group = await context.env.SPLITTER_KV.get<Group>('group', 'json');
 
     if (!group) {
@@ -49,6 +71,25 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
         { success: false, error: 'Group not found' },
         { status: 404 }
       );
+    }
+
+    // Validate bank account fields if provided
+    if (accountNo !== undefined && accountNo !== null && accountNo !== '') {
+      if (!/^[0-9]{6,20}$/.test(accountNo)) {
+        return Response.json(
+          { success: false, error: 'Account number must be 6-20 digits' },
+          { status: 400 }
+        );
+      }
+    }
+
+    if (accountName !== undefined && accountName !== null && accountName !== '') {
+      if (!/^[A-Z\s]+$/.test(accountName)) {
+        return Response.json(
+          { success: false, error: 'Account name must contain only uppercase letters and spaces' },
+          { status: 400 }
+        );
+      }
     }
 
     // Check if name already exists (case-insensitive, excluding current user)
@@ -63,10 +104,20 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    // Update the member's name
+    // Update the member's name and bank account
+    let updatedMember: typeof group.members[0] | null = null;
     const updatedMembers = group.members.map(m => {
       if (m.id === session.memberId) {
-        return { ...m, name: trimmedName };
+        updatedMember = {
+          ...m,
+          name: trimmedName,
+          ...(bankId !== undefined && { bankId }),
+          ...(bankName !== undefined && { bankName }),
+          ...(bankShortName !== undefined && { bankShortName }),
+          ...(accountName !== undefined && { accountName }),
+          ...(accountNo !== undefined && { accountNo }),
+        };
+        return updatedMember;
       }
       return m;
     });
@@ -75,7 +126,7 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
     await context.env.SPLITTER_KV.put('group', JSON.stringify(updatedGroup));
 
     // Create new session with updated name
-    const { session: newSession, token: newToken } = await createSession(
+    const { token: newToken } = await createSession(
       context.env,
       session.memberId,
       trimmedName
@@ -84,14 +135,7 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
     return new Response(
       JSON.stringify({
         success: true,
-        data: {
-          member: { id: session.memberId, name: trimmedName },
-          session: {
-            memberId: newSession.memberId,
-            memberName: newSession.memberName,
-            expiresAt: newSession.expiresAt,
-          },
-        },
+        data: updatedMember,
       }),
       {
         headers: {

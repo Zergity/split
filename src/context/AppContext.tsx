@@ -20,6 +20,7 @@ interface AppContextType {
   addMember: (name: string) => Promise<Member | null>;
   removeMember: (id: string) => Promise<void>;
   updateGroupSettings: (name: string, currency: string) => Promise<void>;
+  updateProfile: (updates: Partial<Member>) => Promise<void>;
   createExpense: (expense: Omit<Expense, 'id' | 'createdAt'>) => Promise<void>;
   updateExpense: (id: string, updates: Partial<Expense>) => Promise<void>;
   deleteExpense: (expense: Expense) => Promise<void>;
@@ -100,6 +101,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  const updateProfile = useCallback(
+    async (updates: Partial<Member>) => {
+      const updated = await api.updateProfile(updates);
+      // Update group members list
+      if (group) {
+        const updatedMembers = group.members.map((m) =>
+          m.id === updated.id ? updated : m
+        );
+        setGroup({ ...group, members: updatedMembers });
+      }
+      // Update current user
+      if (currentUser && currentUser.id === updated.id) {
+        setCurrentUser(updated);
+      }
+    },
+    [group, currentUser, setCurrentUser]
+  );
+
   const createExpense = useCallback(
     async (expense: Omit<Expense, 'id' | 'createdAt'>) => {
       const created = await api.createExpense(expense);
@@ -175,6 +194,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         addMember,
         removeMember,
         updateGroupSettings,
+        updateProfile,
         createExpense,
         updateExpense,
         deleteExpense,

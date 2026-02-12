@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useApp } from '../context/AppContext';
 import { useAuthContext, AuthModal } from './auth';
+import { ProfileModal } from './ProfileModal';
+import type { Member } from '../types';
 
-type AuthFlow = 'signin' | 'register' | 'edit-name' | null;
+type AuthFlow = 'signin' | 'register' | 'edit-profile' | null;
 
 export function MemberSelector() {
-  const { group, currentUser, setCurrentUser, addMember, refreshData } = useApp();
+  const { group, currentUser, setCurrentUser, addMember, updateProfile } = useApp();
   const {
     authenticated,
     session,
@@ -16,16 +18,12 @@ export function MemberSelector() {
     authenticate,
     register,
     logout,
-    updateProfile,
     clearWebAuthnError,
   } = useAuthContext();
 
   const [authFlow, setAuthFlow] = useState<AuthFlow>(null);
   const [newName, setNewName] = useState('');
   const [registerError, setRegisterError] = useState<string | null>(null);
-  const [editName, setEditName] = useState('');
-  const [editError, setEditError] = useState<string | null>(null);
-  const [editLoading, setEditLoading] = useState(false);
 
   // Sync current user with auth session and group data
   useEffect(() => {
@@ -98,30 +96,16 @@ export function MemberSelector() {
     setCurrentUser(null);
   };
 
-  const handleEditName = () => {
-    setEditName(currentUser?.name || '');
-    setEditError(null);
-    setAuthFlow('edit-name');
+  const handleEditProfile = () => {
+    setAuthFlow('edit-profile');
   };
 
-  const handleSaveName = async () => {
-    if (!editName.trim()) return;
-
-    setEditLoading(true);
-    setEditError(null);
+  const handleProfileSave = async (updates: Partial<Member>) => {
     try {
-      const newSession = await updateProfile(editName.trim());
-      // Update current user with new name
-      if (currentUser) {
-        setCurrentUser({ ...currentUser, name: newSession.memberName });
-      }
-      // Refresh group data to get updated member list
-      await refreshData();
-      setAuthFlow(null);
+      await updateProfile(updates);
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : 'Failed to update name');
-    } finally {
-      setEditLoading(false);
+      // Error will be handled by ProfileModal
+      throw err;
     }
   };
 
@@ -129,8 +113,6 @@ export function MemberSelector() {
     setAuthFlow(null);
     setNewName('');
     setRegisterError(null);
-    setEditName('');
-    setEditError(null);
     clearWebAuthnError();
   };
 
@@ -153,9 +135,9 @@ export function MemberSelector() {
       <>
         <div className="flex items-center gap-2">
           <button
-            onClick={handleEditName}
+            onClick={handleEditProfile}
             className="text-sm font-medium text-gray-300 hover:text-cyan-400 hover:underline"
-            title="Click to edit name"
+            title="Click to edit profile"
           >
             {currentUser.name}
           </button>
@@ -167,53 +149,12 @@ export function MemberSelector() {
           </button>
         </div>
 
-        <AuthModal isOpen={authFlow === 'edit-name'} onClose={handleCloseModal}>
-          <div className="p-6">
-            <div className="text-center">
-              <div className="text-4xl mb-4">✏️</div>
-              <h2 className="text-xl font-semibold text-gray-100 mb-2">Edit Name</h2>
-              <p className="text-gray-400 mb-6">
-                Change your display name.
-              </p>
-
-              <div className="mb-6">
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleSaveName()}
-                  placeholder="Your name"
-                  className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-center text-gray-100"
-                  autoFocus
-                  disabled={editLoading}
-                />
-              </div>
-
-              {editError && (
-                <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-lg">
-                  <p className="text-sm text-red-300">{editError}</p>
-                </div>
-              )}
-
-              <div className="flex gap-3">
-                <button
-                  onClick={handleCloseModal}
-                  disabled={editLoading}
-                  className="flex-1 px-4 py-2 border border-gray-600 rounded-lg text-gray-300 hover:bg-gray-700 disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSaveName}
-                  disabled={editLoading || !editName.trim() || editName.trim() === currentUser.name}
-                  className="flex-1 px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 disabled:opacity-50"
-                >
-                  {editLoading ? 'Saving...' : 'Save'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </AuthModal>
+        <ProfileModal
+          isOpen={authFlow === 'edit-profile'}
+          currentUser={currentUser}
+          onClose={handleCloseModal}
+          onSave={handleProfileSave}
+        />
       </>
     );
   }
