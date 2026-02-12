@@ -112,13 +112,25 @@ export type {
   AuthenticationResponseJSON,
 } from '@simplewebauthn/server';
 
+// Passkey invite for cross-device registration
+export interface PasskeyInvite {
+  inviteCode: string;
+  memberId: string;
+  memberName: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 // KV key helpers
 export const KV_KEYS = {
   credentials: (memberId: string) => `credentials:${memberId}`,
   challenge: (memberId: string) => `challenges:${memberId}`,
   session: (sessionId: string) => `sessions:${sessionId}`,
+  invite: (inviteCode: string) => `invites:${inviteCode}`,
+  inviteChallenge: (inviteCode: string) => `invite-challenges:${inviteCode}`,
 } as const;
 
 // Constants
 export const CHALLENGE_TTL_SECONDS = 5 * 60; // 5 minutes
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
+export const INVITE_TTL_SECONDS = 10 * 60; // 10 minutes

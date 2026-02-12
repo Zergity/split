@@ -1,0 +1,65 @@
+import { generateRegistrationOptions } from '@simplewebauthn/server';
+import type { AuthEnv } from '../../types/auth';
+import { getTokenFromCookies, verifySession } from '../../utils/jwt';
+import { storeChallenge } from '../../utils/challenges';
+import { getCredentials } from '../../utils/credentials';
+
+// POST /api/auth/passkeys/options - Get registration options for linking a new passkey
+export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
+  try {
+    const token = getTokenFromCookies(context.request);
+
+    if (!token) {
+      return Response.json(
+        { success: false, error: 'Not authenticated' },
+        { status: 401 }
+      );
+    }
+
+    const session = await verifySession(context.env, token);
+
+    if (!session) {
+      return Response.json(
+        { success: false, error: 'Session expired' },
+        { status: 401 }
+      );
+    }
+
+    const env = context.env;
+    const { memberId, memberName } = session;
+
+    // Get existing credentials to exclude them from registration
+    const existingCredentials = await getCredentials(env, memberId);
+
+    const options = await generateRegistrationOptions({
+      rpName: env.RP_NAME || 'Splitter',
+      rpID: env.RP_ID || 'localhost',
+      userName: memberName,
+      userID: new TextEncoder().encode(memberId),
+      userDisplayName: memberName,
+      attestationType: 'none',
+      excludeCredentials: existingCredentials.map(cred => ({
+        id: cred.id,
+        transports: cred.transports,
+      })),
+      authenticatorSelection: {
+        residentKey: 'required',
+        userVerification: 'preferred',
+      },
+    });
+
+    // Store challenge for verification
+    await storeChallenge(env, memberId, options.challenge, 'registration');
+
+    return Response.json({
+      success: true,
+      data: { options },
+    });
+  } catch (error) {
+    console.error('Link passkey options error:', error);
+    return Response.json(
+      { success: false, error: 'Failed to generate registration options' },
+      { status: 500 }
+    );
+  }
+};

@@ -10,6 +10,7 @@ import { PendingActions } from './pages/PendingActions';
 import { History } from './pages/History';
 import { Balances } from './pages/Balances';
 import { AddSettlement } from './pages/AddSettlement';
+import { AcceptInvite } from './pages/AcceptInvite';
 
 function App() {
   return (
@@ -26,6 +27,7 @@ function App() {
               <Route path="/history" element={<History />} />
               <Route path="/balances" element={<Balances />} />
               <Route path="/settle" element={<AddSettlement />} />
+              <Route path="/invite/:code" element={<AcceptInvite />} />
             </Routes>
           </Layout>
         </AppProvider>

@@ -1,0 +1,97 @@
+import { generateRegistrationOptions } from '@simplewebauthn/server';
+import type { AuthEnv, PasskeyInvite, StoredChallenge } from '../../../types/auth';
+import { KV_KEYS, CHALLENGE_TTL_SECONDS } from '../../../types/auth';
+import { getCredentials } from '../../../utils/credentials';
+
+interface InviteOptionsRequest {
+  inviteCode: string;
+}
+
+// POST /api/auth/passkeys/invite/options - Get registration options using an invite code
+export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
+  try {
+    const { inviteCode } = await context.request.json() as InviteOptionsRequest;
+
+    if (!inviteCode) {
+      return Response.json(
+        { success: false, error: 'inviteCode is required' },
+        { status: 400 }
+      );
+    }
+
+    const env = context.env;
+
+    // Get and validate the invite
+    const invite = await env.SPLITTER_KV.get<PasskeyInvite>(
+      KV_KEYS.invite(inviteCode),
+      'json'
+    );
+
+    if (!invite) {
+      return Response.json(
+        { success: false, error: 'Invalid or expired invite code' },
+        { status: 400 }
+      );
+    }
+
+    // Check if invite has expired
+    if (new Date(invite.expiresAt) < new Date()) {
+      await env.SPLITTER_KV.delete(KV_KEYS.invite(inviteCode));
+      return Response.json(
+        { success: false, error: 'Invite code has expired' },
+        { status: 400 }
+      );
+    }
+
+    const { memberId, memberName } = invite;
+
+    // Get existing credentials to exclude them from registration
+    const existingCredentials = await getCredentials(env, memberId);
+
+    const options = await generateRegistrationOptions({
+      rpName: env.RP_NAME || 'Splitter',
+      rpID: env.RP_ID || 'localhost',
+      userName: memberName,
+      userID: new TextEncoder().encode(memberId),
+      userDisplayName: memberName,
+      attestationType: 'none',
+      excludeCredentials: existingCredentials.map(cred => ({
+        id: cred.id,
+        transports: cred.transports,
+      })),
+      authenticatorSelection: {
+        residentKey: 'required',
+        userVerification: 'preferred',
+      },
+    });
+
+    // Store challenge associated with the invite code (not memberId)
+    const now = Date.now();
+    const storedChallenge: StoredChallenge = {
+      challenge: options.challenge,
+      type: 'registration',
+      createdAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + CHALLENGE_TTL_SECONDS * 1000).toISOString(),
+    };
+
+    await env.SPLITTER_KV.put(
+      KV_KEYS.inviteChallenge(inviteCode),
+      JSON.stringify(storedChallenge),
+      { expirationTtl: CHALLENGE_TTL_SECONDS }
+    );
+
+    return Response.json({
+      success: true,
+      data: {
+        options,
+        memberName, // Let the new device know whose account this is
+      },
+    });
+  } catch (error) {
+    console.error('Invite options error:', error);
+    return Response.json(
+      { success: false, error: 'Failed to generate registration options' },
+      { status: 500 }
+    );
+  }
+};

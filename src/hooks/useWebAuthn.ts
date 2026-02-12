@@ -6,6 +6,7 @@ import {
 } from '@simplewebauthn/browser';
 import * as authApi from '../api/auth';
 import type { SessionInfo } from '../types';
+import type { PasskeyInviteInfo } from '../api/auth';
 
 interface WebAuthnState {
   loading: boolean;
@@ -16,6 +17,9 @@ interface UseWebAuthnReturn extends WebAuthnState {
   isSupported: boolean;
   register: (memberId: string, memberName: string, friendlyName?: string) => Promise<SessionInfo>;
   authenticate: () => Promise<SessionInfo>;
+  linkPasskey: (friendlyName?: string) => Promise<void>;
+  createPasskeyInvite: () => Promise<PasskeyInviteInfo>;
+  acceptPasskeyInvite: (inviteCode: string, friendlyName?: string) => Promise<SessionInfo>;
   clearError: () => void;
 }
 
@@ -82,6 +86,71 @@ export function useWebAuthn(): UseWebAuthnReturn {
     }
   }, []);
 
+  const linkPasskey = useCallback(async (friendlyName?: string): Promise<void> => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Get registration options from server (uses session data)
+      const options = await authApi.getLinkPasskeyOptions();
+
+      // Start WebAuthn registration (shows biometric prompt)
+      const credential = await startRegistration({ optionsJSON: options });
+
+      // Verify with server (no new session created)
+      await authApi.verifyLinkPasskey(credential, friendlyName);
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const createPasskeyInvite = useCallback(async (): Promise<PasskeyInviteInfo> => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const invite = await authApi.createPasskeyInvite();
+      return invite;
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const acceptPasskeyInvite = useCallback(async (
+    inviteCode: string,
+    friendlyName?: string
+  ): Promise<SessionInfo> => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Get registration options using invite code
+      const { options } = await authApi.getInvitePasskeyOptions(inviteCode);
+
+      // Start WebAuthn registration (shows biometric prompt)
+      const credential = await startRegistration({ optionsJSON: options });
+
+      // Verify with server and get session
+      const session = await authApi.verifyInvitePasskey(inviteCode, credential, friendlyName);
+
+      return session;
+    } catch (err) {
+      const message = getErrorMessage(err);
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const clearError = useCallback(() => {
     setError(null);
   }, []);
@@ -92,6 +161,9 @@ export function useWebAuthn(): UseWebAuthnReturn {
     isSupported,
     register,
     authenticate,
+    linkPasskey,
+    createPasskeyInvite,
+    acceptPasskeyInvite,
     clearError,
   };
 }

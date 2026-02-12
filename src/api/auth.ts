@@ -136,3 +136,75 @@ export async function updateProfile(name: string): Promise<SessionInfo> {
   });
   return result.session;
 }
+
+// Link new passkey (for authenticated users)
+export async function getLinkPasskeyOptions(): Promise<PublicKeyCredentialCreationOptionsJSON> {
+  const result = await fetchAuthApi<{ options: PublicKeyCredentialCreationOptionsJSON }>(
+    '/passkeys/options',
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }
+  );
+  return result.options;
+}
+
+export async function verifyLinkPasskey(
+  credential: unknown,
+  friendlyName?: string
+): Promise<void> {
+  await fetchAuthApi<{ verified: boolean }>(
+    '/passkeys/verify',
+    {
+      method: 'POST',
+      body: JSON.stringify({ credential, friendlyName }),
+    }
+  );
+}
+
+// Cross-device passkey invite
+export interface PasskeyInviteInfo {
+  inviteCode: string;
+  inviteUrl: string;
+  expiresAt: string;
+}
+
+export async function createPasskeyInvite(): Promise<PasskeyInviteInfo> {
+  return fetchAuthApi<PasskeyInviteInfo>(
+    '/passkeys/invite',
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }
+  );
+}
+
+export async function getInvitePasskeyOptions(
+  inviteCode: string
+): Promise<{ options: PublicKeyCredentialCreationOptionsJSON; memberName: string }> {
+  return fetchAuthApi<{ options: PublicKeyCredentialCreationOptionsJSON; memberName: string }>(
+    '/passkeys/invite/options',
+    {
+      method: 'POST',
+      body: JSON.stringify({ inviteCode }),
+    }
+  );
+}
+
+export async function verifyInvitePasskey(
+  inviteCode: string,
+  credential: unknown,
+  friendlyName?: string
+): Promise<SessionInfo> {
+  const result = await fetchAuthApi<{ verified: boolean; session: SessionInfo }>(
+    '/passkeys/invite/verify',
+    {
+      method: 'POST',
+      body: JSON.stringify({ inviteCode, credential, friendlyName }),
+    }
+  );
+  if (!result.session) {
+    throw new Error('Invite verification failed');
+  }
+  return result.session;
+}

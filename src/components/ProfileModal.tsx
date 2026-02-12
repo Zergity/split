@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import type { Member } from '../types';
 import { BANKS } from '../constants/banks';
+import { PasskeyList } from './auth';
 
 interface ProfileModalProps {
   isOpen: boolean;
@@ -263,6 +264,11 @@ export function ProfileModal({ isOpen, currentUser, onClose, onSave }: ProfileMo
                 Numbers only
               </p>
             </div>
+          </div>
+
+          {/* Security Section */}
+          <div className="border-t border-gray-700 pt-6">
+            <PasskeyList />
           </div>
         </div>
 

@@ -2,6 +2,7 @@ import { createContext, useContext, ReactNode } from 'react';
 import { useAuth } from '../../hooks/useAuth';
 import { useWebAuthn } from '../../hooks/useWebAuthn';
 import type { AuthState, SessionInfo, PasskeyInfo } from '../../types';
+import type { PasskeyInviteInfo } from '../../api/auth';
 
 interface AuthContextType extends AuthState {
   isSupported: boolean;
@@ -9,6 +10,9 @@ interface AuthContextType extends AuthState {
   webAuthnError: string | null;
   register: (memberId: string, memberName: string, friendlyName?: string) => Promise<SessionInfo>;
   authenticate: () => Promise<SessionInfo>;
+  linkPasskey: (friendlyName?: string) => Promise<void>;
+  createPasskeyInvite: () => Promise<PasskeyInviteInfo>;
+  acceptPasskeyInvite: (inviteCode: string, friendlyName?: string) => Promise<SessionInfo>;
   logout: () => Promise<void>;
   setSession: (session: SessionInfo) => void;
   listPasskeys: () => Promise<PasskeyInfo[]>;
@@ -37,6 +41,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return session;
   };
 
+  // Wrap acceptPasskeyInvite to also update auth state
+  const acceptPasskeyInvite = async (inviteCode: string, friendlyName?: string): Promise<SessionInfo> => {
+    const session = await webAuthn.acceptPasskeyInvite(inviteCode, friendlyName);
+    auth.setSession(session);
+    return session;
+  };
+
   const value: AuthContextType = {
     // Auth state
     authenticated: auth.authenticated,
@@ -51,6 +62,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Actions
     register,
     authenticate,
+    linkPasskey: webAuthn.linkPasskey,
+    createPasskeyInvite: webAuthn.createPasskeyInvite,
+    acceptPasskeyInvite,
     logout: auth.logout,
     setSession: auth.setSession,
     listPasskeys: auth.listPasskeys,
