@@ -53,7 +53,7 @@ export function BalanceCard({
               </span>
             )}
           </span>
-          {signedNegative && (
+          {signedNegative && !hasPendingBalance && (
             <Link
               to={suggestedSettlement
                 ? `/settle?from=${balance.memberId}&to=${suggestedSettlement.to}&amount=${suggestedSettlement.amount}`
@@ -62,6 +62,14 @@ export function BalanceCard({
               className="text-sm bg-cyan-600 text-white px-3 py-1 rounded hover:bg-cyan-700"
             >
               Settle
+            </Link>
+          )}
+          {hasPendingBalance && (
+            <Link
+              to="/pending"
+              className="text-sm bg-yellow-600 text-white px-3 py-1 rounded hover:bg-yellow-700"
+            >
+              Pending
             </Link>
           )}
         </div>
