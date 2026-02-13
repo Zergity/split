@@ -1,13 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
-import { formatCurrency, roundNumber } from '../utils/balances';
+import { formatCurrency, roundNumber, isDeleted } from '../utils/balances';
 import { PaymentModal } from '../components/PaymentModal';
 
 export function AddSettlement() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { group, currentUser, createExpense } = useApp();
+  const { group, expenses, currentUser, createExpense } = useApp();
 
   const [fromMemberId, setFromMemberId] = useState(searchParams.get('from') || '');
   const [toMemberId, setToMemberId] = useState(searchParams.get('to') || '');
@@ -28,6 +28,18 @@ export function AddSettlement() {
   const fromMember = group.members.find((m) => m.id === fromMemberId);
   const toMember = group.members.find((m) => m.id === toMemberId);
   const parsedAmount = parseFloat(amount) || 0;
+
+  // Block only if there's a pending (unconfirmed) settlement between these members.
+  // Once the recipient signs off, the settlement is finalized and new ones are allowed.
+  const pendingSettlement = fromMemberId && toMemberId
+    ? expenses.find(
+        (e) =>
+          e.splitType === 'settlement' &&
+          !isDeleted(e) &&
+          e.paidBy === fromMemberId &&
+          e.splits.some((s) => s.memberId === toMemberId && !s.signedOff)
+      )
+    : undefined;
 
   const hasBankAccountInfo = (memberId: string): boolean => {
     const member = group.members.find(m => m.id === memberId);
@@ -207,6 +219,12 @@ export function AddSettlement() {
           </div>
         )}
 
+        {pendingSettlement && (
+          <div className="bg-yellow-900/30 border border-yellow-700 text-yellow-300 px-4 py-3 rounded-lg">
+            A settlement from {fromMember?.name} to {toMember?.name} ({formatCurrency(pendingSettlement.amount, group.currency)}) is pending confirmation by {toMember?.name}.
+          </div>
+        )}
+
         {error && (
           <div className="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg">
             {error}
@@ -215,7 +233,7 @@ export function AddSettlement() {
 
         <button
           type="submit"
-          disabled={submitting || !fromMemberId || !toMemberId || parsedAmount <= 0}
+          disabled={submitting || !fromMemberId || !toMemberId || parsedAmount <= 0 || !!pendingSettlement}
           className="w-full bg-cyan-600 text-white py-3 rounded-lg font-medium hover:bg-cyan-700 disabled:opacity-50"
         >
           {submitting ? 'Recording...' : 'Record Settlement'}
