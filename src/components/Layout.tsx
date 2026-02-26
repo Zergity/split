@@ -2,6 +2,7 @@ import { ReactNode } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { Navigation } from './Navigation';
 import { MemberSelector } from './MemberSelector';
+import { NotificationBell } from './NotificationBell';
 import { useApp } from '../context/AppContext';
 
 interface LayoutProps {
@@ -76,7 +77,10 @@ export function Layout({ children }: LayoutProps) {
               <h1 className="text-xl font-bold text-cyan-400">1Matrix</h1>
             </div>
           </div>
-          <MemberSelector />
+          <div className="flex items-center gap-2">
+            <NotificationBell />
+            <MemberSelector />
+          </div>
         </div>
       </header>
       <main className="flex-1 max-w-4xl mx-auto w-full px-4 py-6">

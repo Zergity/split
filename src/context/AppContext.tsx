@@ -181,6 +181,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [group, currentUser, setCurrentUser]);
 
+  // Refresh data when a push notification arrives (service worker broadcasts REFRESH_DATA)
+  useEffect(() => {
+    if (!navigator.serviceWorker) return;
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'REFRESH_DATA') {
+        refreshData();
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', handleMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', handleMessage);
+  }, [refreshData]);
+
+  // Refresh data when the user returns to this tab
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshData();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [refreshData]);
+
   return (
     <AppContext.Provider
       value={{

@@ -10,6 +10,9 @@ export interface AuthEnv {
   RP_ID: string;
   RP_NAME: string;
   RP_ORIGIN: string;
+  VAPID_PUBLIC_KEY: string;
+  VAPID_PRIVATE_KEY: string;
+  VAPID_SUBJECT: string;
 }
 
 // Stored WebAuthn credential for a user
@@ -121,6 +124,27 @@ export interface PasskeyInvite {
   expiresAt: string;
 }
 
+// Push notification subscription (one per device)
+export interface PushSubscriptionRecord {
+  endpoint: string;
+  keys: {
+    p256dh: string;  // base64url
+    auth: string;    // base64url
+  };
+  createdAt: string;
+  userAgent?: string;
+}
+
+// Notification history record
+export interface NotificationRecord {
+  id: string;
+  title: string;
+  body: string;
+  url?: string;
+  createdAt: string;
+  read: boolean;
+}
+
 // KV key helpers
 export const KV_KEYS = {
   credentials: (memberId: string) => `credentials:${memberId}`,
@@ -128,6 +152,8 @@ export const KV_KEYS = {
   session: (sessionId: string) => `sessions:${sessionId}`,
   invite: (inviteCode: string) => `invites:${inviteCode}`,
   inviteChallenge: (inviteCode: string) => `invite-challenges:${inviteCode}`,
+  pushSubscriptions: (memberId: string) => `push-subs:${memberId}`,
+  notifications: (memberId: string) => `notifications:${memberId}`,
 } as const;
 
 // Constants

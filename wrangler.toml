@@ -16,6 +16,8 @@ id = "c23e2dd45e264bf29351ea5a0dd7eb40"
 RP_ID = "split.vietcha.in"
 RP_NAME = "Splitter"
 RP_ORIGIN = "https://split.vietcha.in"
+VAPID_PUBLIC_KEY = ""
+VAPID_SUBJECT = "mailto:admin@split.vietcha.in"
 
 [ai]
 binding = "AI"
