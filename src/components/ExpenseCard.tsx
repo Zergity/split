@@ -22,13 +22,28 @@ export function ExpenseCard({
   onDelete,
   initialExpanded = false,
 }: ExpenseCardProps) {
-  const { currentUser, updateExpense, claimExpenseItem } = useApp();
+  const { currentUser, updateExpense, claimExpenseItem, deleteExpense } = useApp();
   const [expanded, setExpanded] = useState(initialExpanded);
   const [showReceipt, setShowReceipt] = useState(false);
   const [editingTags, setEditingTags] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [savingTags, setSavingTags] = useState(false);
   const [claimingItemId, setClaimingItemId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (onDelete) {
+      onDelete();
+    } else {
+      if (!confirm('Are you sure you want to delete this transaction?')) return;
+      setDeleting(true);
+      try {
+        await deleteExpense(expense);
+      } finally {
+        setDeleting(false);
+      }
+    }
+  };
 
   const payer = members.find((m) => m.id === expense.paidBy);
   const creator = members.find((m) => m.id === expense.createdBy);
@@ -81,10 +96,11 @@ export function ExpenseCard({
                 </span>
                 {canDelete && !expenseDeleted && (
                   <button
-                    onClick={onDelete}
-                    className="text-red-400 text-xs hover:text-red-300"
+                    onClick={handleDelete}
+                    disabled={deleting}
+                    className="text-red-400 text-xs hover:text-red-300 disabled:opacity-50"
                   >
-                    Delete
+                    {deleting ? 'Deleting...' : 'Delete'}
                   </button>
                 )}
               </div>
@@ -517,13 +533,14 @@ export function ExpenseCard({
         </div>
       )}
 
-      {onDelete && canDelete && !isSettlement && !expenseDeleted && (
+      {canDelete && !isSettlement && !expenseDeleted && (
         <div className="mt-3 pt-3 border-t border-gray-700">
           <button
-            onClick={onDelete}
-            className="text-red-400 text-sm hover:text-red-300"
+            onClick={handleDelete}
+            disabled={deleting}
+            className="text-red-400 text-sm hover:text-red-300 disabled:opacity-50"
           >
-            Delete transaction
+            {deleting ? 'Deleting...' : 'Delete transaction'}
           </button>
         </div>
       )}

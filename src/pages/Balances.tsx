@@ -26,19 +26,21 @@ export function Balances() {
           </div>
         ) : (
           <div className="space-y-3">
-            {sortedBalances.map((balance) => {
-              // Find suggested settlement where this member is the payer
-              const suggestedSettlement = settlements.find(s => s.from === balance.memberId);
-              return (
-                <BalanceCard
-                  key={balance.memberId}
-                  balance={balance}
-                  currency={group.currency}
-                  isCurrentUser={balance.memberId === currentUser?.id}
-                  suggestedSettlement={suggestedSettlement}
-                />
-              );
-            })}
+            {sortedBalances
+              .filter((balance) => Math.round((balance.signedBalance + balance.pendingBalance) * 10) !== 0)
+              .map((balance) => {
+                // Find suggested settlement where this member is the payer
+                const suggestedSettlement = settlements.find(s => s.from === balance.memberId);
+                return (
+                  <BalanceCard
+                    key={balance.memberId}
+                    balance={balance}
+                    currency={group.currency}
+                    isCurrentUser={balance.memberId === currentUser?.id}
+                    suggestedSettlement={suggestedSettlement}
+                  />
+                );
+              })}
           </div>
         )}
       </section>
