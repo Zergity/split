@@ -31,6 +31,9 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     const origin = env.RP_ORIGIN || new URL(context.request.url).origin;
     const rpID = env.RP_ID || 'localhost';
 
+    console.log('[reg/verify] JWT_SECRET present:', !!env.JWT_SECRET, 'len:', env.JWT_SECRET?.length);
+    console.log('[reg/verify] origin:', origin, 'rpID:', rpID);
+
     // Verify the registration response
     const verification = await verifyRegistrationResponse({
       response: credential,
@@ -86,7 +89,7 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       }
     );
   } catch (error) {
-    console.error('Registration verification error:', error);
+    console.error('[reg/verify] FULL ERROR:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return Response.json(
       { success: false, error: `Failed to verify registration: ${errorMessage}` },

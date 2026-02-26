@@ -124,3 +124,17 @@ export interface PasskeyInfo {
 }
 
 export type AuthMode = 'login' | 'register';
+
+export interface NotifyPrefs {
+  newExpense: boolean;
+  expenseEdited: boolean;
+  expenseDeleted: boolean;
+  settlementRequest: boolean;
+  settlementAccepted: boolean;
+  settlementRejected: boolean;
+}
+
+export interface TelegramStatus {
+  connected: boolean;
+  notifyPrefs: NotifyPrefs | null;
+}
