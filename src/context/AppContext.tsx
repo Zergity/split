@@ -171,6 +171,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshData();
   }, [refreshData]);
 
+
   // Update current user if member list changes (e.g., member removed)
   useEffect(() => {
     if (currentUser && group) {

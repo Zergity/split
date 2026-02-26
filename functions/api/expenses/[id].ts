@@ -74,39 +74,46 @@ export const onRequestPut: PagesFunction<Env> = async (context) => {
       createdAt: expenses[index].createdAt,
     };
 
+    const updatedExpense = expenses[index];
     await saveExpenses(context.env.SPLITTER_KV, expenses);
 
-    // Send debounced Telegram notifications
-    const { sendDebouncedEditNotification } = await import('../utils/telegram');
-    const updatedExpense = expenses[index];
-    const memberIds = updatedExpense.splits.map((s) => s.memberId);
-    const editorId = (updates as Partial<Expense> & { editedBy?: string }).editedBy ?? updatedExpense.paidBy;
+    // Fire-and-forget: Telegram notification must NOT block the response.
+    // If Telegram fails, the KV save already succeeded — don't penalize the user.
+    context.waitUntil((async () => {
+      try {
+        const { sendDebouncedEditNotification } = await import('../utils/telegram');
+        const memberIds = updatedExpense.splits.map((s) => s.memberId);
+        const editorId = (updates as Partial<Expense> & { editedBy?: string }).editedBy ?? updatedExpense.paidBy;
 
-    const group = await context.env.SPLITTER_KV.get<Group>('group', 'json');
-    const members = group?.members ?? [];
-    const currency = group?.currency ?? '';
-    const payerName = getMemberName(members, updatedExpense.paidBy);
-    const editorName = getMemberName(members, editorId);
-    const splitsDetail = updatedExpense.splits
-      .map((s) => `  • ${getMemberName(members, s.memberId)}: ${formatAmount(s.amount, currency)}`)
-      .join('\n');
+        const group = await context.env.SPLITTER_KV.get<Group>('group', 'json');
+        const members = group?.members ?? [];
+        const currency = group?.currency ?? '';
+        const payerName = getMemberName(members, updatedExpense.paidBy);
+        const editorName = getMemberName(members, editorId);
+        const splitsDetail = updatedExpense.splits
+          .map((s) => `  • ${getMemberName(members, s.memberId)}: ${formatAmount(s.amount, currency)}`)
+          .join('\n');
 
-    await sendDebouncedEditNotification(
-      updatedExpense.id,
-      memberIds,
-      editorId,
-      `✏️ <b>Expense updated</b>\n\n📌 ${updatedExpense.description}\n👤 Paid by: <b>${payerName}</b>\n✍️ Edited by: <b>${editorName}</b>\n💰 Total: <b>${formatAmount(updatedExpense.amount, currency)}</b>\n\n<b>Each member's share:</b>\n${splitsDetail}\n\n⚠️ Please confirm again.`,
-      context.env,
-      {
-        inline_keyboard: [
-          [{ text: '✅ Confirm again', callback_data: `signoff:${updatedExpense.id}` }],
-        ],
-      },
-    );
+        await sendDebouncedEditNotification(
+          updatedExpense.id,
+          memberIds,
+          editorId,
+          `✏️ <b>Expense updated</b>\n\n📌 ${updatedExpense.description}\n👤 Paid by: <b>${payerName}</b>\n✍️ Edited by: <b>${editorName}</b>\n💰 Total: <b>${formatAmount(updatedExpense.amount, currency)}</b>\n\n<b>Each member's share:</b>\n${splitsDetail}\n\n⚠️ Please confirm again.`,
+          context.env,
+          {
+            inline_keyboard: [
+              [{ text: '✅ Confirm again', callback_data: `signoff:${updatedExpense.id}` }],
+            ],
+          },
+        );
+      } catch {
+        // Telegram failure must not affect the API response
+      }
+    })());
 
     return Response.json({
       success: true,
-      data: expenses[index],
+      data: updatedExpense,
     });
   } catch (error) {
     return Response.json(
@@ -133,23 +140,29 @@ export const onRequestDelete: PagesFunction<Env> = async (context) => {
     expenses.splice(index, 1);
     await saveExpenses(context.env.SPLITTER_KV, expenses);
 
-    // Send Telegram notifications
-    const { notifyMembers } = await import('../utils/telegram');
-    const memberIds = deletedExpense.splits.map((s) => s.memberId);
-    const deletorId = context.request.headers.get('X-Member-Id') ?? deletedExpense.paidBy;
+    // Fire-and-forget: Telegram must NOT block the response
+    context.waitUntil((async () => {
+      try {
+        const { notifyMembers } = await import('../utils/telegram');
+        const memberIds = deletedExpense.splits.map((s) => s.memberId);
+        const deletorId = context.request.headers.get('X-Member-Id') ?? deletedExpense.paidBy;
 
-    const groupDel = await context.env.SPLITTER_KV.get<Group>('group', 'json');
-    const membersDel = groupDel?.members ?? [];
-    const currencyDel = groupDel?.currency ?? '';
-    const deletorName = getMemberName(membersDel, deletorId);
+        const groupDel = await context.env.SPLITTER_KV.get<Group>('group', 'json');
+        const membersDel = groupDel?.members ?? [];
+        const currencyDel = groupDel?.currency ?? '';
+        const deletorName = getMemberName(membersDel, deletorId);
 
-    await notifyMembers(
-      memberIds,
-      deletorId,
-      'expenseDeleted',
-      `🗑️ <b>Expense deleted</b>\n\n📌 ${deletedExpense.description}\n💰 Total: <b>${formatAmount(deletedExpense.amount, currencyDel)}</b>\n🙍 Deleted by: <b>${deletorName}</b>`,
-      context.env,
-    );
+        await notifyMembers(
+          memberIds,
+          deletorId,
+          'expenseDeleted',
+          `🗑️ <b>Expense deleted</b>\n\n📌 ${deletedExpense.description}\n💰 Total: <b>${formatAmount(deletedExpense.amount, currencyDel)}</b>\n🙍 Deleted by: <b>${deletorName}</b>`,
+          context.env,
+        );
+      } catch {
+        // Telegram failure must not affect the API response
+      }
+    })());
 
     return Response.json({
       success: true,

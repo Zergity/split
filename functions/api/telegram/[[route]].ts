@@ -141,7 +141,10 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     await env.SPLITTER_KV.put(KV_KEYS.telegramChatId(chatId), connectData.memberId);
     await env.SPLITTER_KV.delete(KV_KEYS.telegramConnect(token));
 
-    await ctx.reply('✅ Connected successfully! You will receive notifications here.');
+    const group = await env.SPLITTER_KV.get<{ members: Array<{ id: string; name: string }> }>('group', 'json');
+    const memberName = group?.members.find((m) => m.id === connectData.memberId)?.name ?? connectData.memberId;
+
+    await ctx.reply(`✅ Connected successfully! Notifications for <b>${memberName}</b> will be sent here.`, { parse_mode: 'HTML' });
   });
 
   // Callback query — button taps
