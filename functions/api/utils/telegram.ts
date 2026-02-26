@@ -24,6 +24,14 @@ export async function sendTelegramNotification(
   const data = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(memberId), 'json');
   if (!data) return;
 
+  // Cross-check: verify this chatId still belongs to this memberId (detect stale/duplicate entries)
+  const ownerOfChat = await env.SPLITTER_KV.get(KV_KEYS.telegramChatId(data.chatId));
+  if (ownerOfChat !== memberId) {
+    // Stale entry — clean up and skip
+    await env.SPLITTER_KV.delete(KV_KEYS.telegram(memberId));
+    return;
+  }
+
   const prefs = data.notifyPrefs ?? DEFAULT_NOTIFY_PREFS;
   if (!prefs[event]) return;
 
