@@ -134,3 +134,17 @@ export interface NotificationRecord {
   createdAt: string;
   read: boolean;
 }
+
+export interface NotifyPrefs {
+  newExpense: boolean;
+  expenseEdited: boolean;
+  expenseDeleted: boolean;
+  settlementRequest: boolean;
+  settlementAccepted: boolean;
+  settlementRejected: boolean;
+}
+
+export interface TelegramStatus {
+  connected: boolean;
+  notifyPrefs: NotifyPrefs | null;
+}
