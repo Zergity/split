@@ -3,8 +3,8 @@
  * Uses Web Crypto API only (no Node.js crypto, no web-push npm).
  * Implements VAPID (RFC 8292) and message encryption (RFC 8291, aes128gcm).
  */
-import type { AuthEnv, PushSubscriptionRecord, NotificationRecord } from '../types/auth';
-import { KV_KEYS } from '../types/auth';
+import type { AuthEnv, PushSubscriptionRecord, NotificationRecord, NotifyPrefs, NotifyEvent } from '../types/auth';
+import { KV_KEYS, DEFAULT_NOTIFY_PREFS } from '../types/auth';
 
 const MAX_NOTIFICATIONS = 50; // Keep last 50 per member
 
@@ -245,11 +245,12 @@ export async function notifyMembers(
   env: AuthEnv,
   memberIds: string[],
   payload: { title: string; body: string; url?: string; tag?: string },
+  event?: NotifyEvent,
 ): Promise<void> {
   console.log(`[push] Notifying ${memberIds.length} members:`, memberIds);
   const tasks: Promise<void>[] = [];
 
-  // Save notification history for all members (regardless of push subscription)
+  // Save notification history for all members (regardless of push subscription or prefs)
   for (const memberId of memberIds) {
     const notiKey = KV_KEYS.notifications(memberId);
     const existing = (await env.SPLITTER_KV.get<NotificationRecord[]>(notiKey, 'json')) || [];
@@ -266,6 +267,11 @@ export async function notifyMembers(
   }
 
   for (const memberId of memberIds) {
+    // Check push notification prefs before sending
+    if (event) {
+      const prefs = await env.SPLITTER_KV.get<NotifyPrefs>(KV_KEYS.pushPrefs(memberId), 'json') ?? DEFAULT_NOTIFY_PREFS;
+      if (!prefs[event]) continue;
+    }
     const key = KV_KEYS.pushSubscriptions(memberId);
     const subscriptions = await env.SPLITTER_KV.get<PushSubscriptionRecord[]>(key, 'json');
     if (!subscriptions || subscriptions.length === 0) {

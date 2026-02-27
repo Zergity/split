@@ -75,7 +75,7 @@ async function handleStatus(request: Request, env: Env): Promise<Response> {
   const data = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(memberId), 'json');
   return Response.json({
     success: true,
-    data: { connected: !!data, notifyPrefs: data?.notifyPrefs ?? null },
+    data: { connected: !!data, notifyPrefs: data?.notifyPrefs ?? null, telegramName: data?.telegramName ?? null },
   });
 }
 
@@ -119,6 +119,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     }
 
     const chatId = String(ctx.chat.id);
+    const telegramName = [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(' ') || ctx.from?.username || 'Unknown';
 
     // Enforce 1:1 — if this Telegram account is already linked to another member, disconnect it first
     const existingMemberId = await env.SPLITTER_KV.get(KV_KEYS.telegramChatId(chatId));
@@ -134,6 +135,7 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
 
     const telegramData: TelegramData = {
       chatId,
+      telegramName,
       connectedAt: new Date().toISOString(),
       notifyPrefs: DEFAULT_NOTIFY_PREFS,
     };

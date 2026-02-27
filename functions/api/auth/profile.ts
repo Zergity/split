@@ -8,6 +8,7 @@ interface Group {
   members: {
     id: string;
     name: string;
+    avatarSeed?: string;
     bankId?: string;
     bankName?: string;
     bankShortName?: string;
@@ -40,6 +41,7 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
 
     const {
       name,
+      avatarSeed,
       bankId,
       bankName,
       bankShortName,
@@ -47,6 +49,7 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
       accountNo
     } = await context.request.json() as {
       name?: string;
+      avatarSeed?: string;
       bankId?: string;
       bankName?: string;
       bankShortName?: string;
@@ -111,6 +114,7 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
         updatedMember = {
           ...m,
           name: trimmedName,
+          ...(avatarSeed !== undefined && { avatarSeed }),
           ...(bankId !== undefined && { bankId }),
           ...(bankName !== undefined && { bankName }),
           ...(bankShortName !== undefined && { bankShortName }),
