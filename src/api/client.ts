@@ -1,4 +1,4 @@
-import { Group, Expense, ApiResponse, ReceiptOCRResult } from '../types';
+import { Group, Expense, ApiResponse, ReceiptOCRResult, NotificationRecord } from '../types';
 import type { Member } from '../types';
 
 const API_BASE = '/api';
@@ -128,6 +128,15 @@ export async function updateProfile(updates: Partial<Member>): Promise<Member> {
     method: 'PUT',
     body: JSON.stringify(updates),
   });
+}
+
+// Notifications API
+export async function getNotifications(): Promise<NotificationRecord[]> {
+  return fetchApi<NotificationRecord[]>('/notifications');
+}
+
+export async function markNotificationsRead(): Promise<NotificationRecord[]> {
+  return fetchApi<NotificationRecord[]>('/notifications', { method: 'PUT' });
 }
 
 // Claim/unclaim expense item helper

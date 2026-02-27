@@ -124,3 +124,13 @@ export interface PasskeyInfo {
 }
 
 export type AuthMode = 'login' | 'register';
+
+// Notification history
+export interface NotificationRecord {
+  id: string;
+  title: string;
+  body: string;
+  url?: string;
+  createdAt: string;
+  read: boolean;
+}
