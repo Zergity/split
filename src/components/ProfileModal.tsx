@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import { createAvatar } from '@dicebear/core';
 import { thumbs } from '@dicebear/collection';
 import type { Member } from '../types';
-import { BANKS } from '../constants/banks';
-import { PasskeyList } from './auth';
+import { ProfileTab } from './settings/ProfileTab';
+import { PreferencesTab } from './settings/PreferencesTab';
+import { NotificationsTab } from './settings/NotificationsTab';
 
 interface ProfileModalProps {
   isOpen: boolean;
@@ -36,7 +37,7 @@ export function ProfileModal({ isOpen, currentUser, onClose, onSave, onLogout }:
     return () => document.removeEventListener('mousedown', handler);
   }, [bankDropdownOpen]);
 
-  // Load current user data when modal opens
+  // Reset to profile tab when modal opens
   useEffect(() => {
     if (isOpen && currentUser) {
       setName(currentUser.name);
@@ -51,25 +52,16 @@ export function ProfileModal({ isOpen, currentUser, onClose, onSave, onLogout }:
   // Close on escape key
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
-        onClose();
-      }
+      if (e.key === 'Escape' && isOpen) onClose();
     };
-
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
   }, [isOpen, onClose]);
 
   // Prevent body scroll when modal is open
   useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
-      document.body.style.overflow = '';
-    }
-    return () => {
-      document.body.style.overflow = '';
-    };
+    document.body.style.overflow = isOpen ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
   }, [isOpen]);
 
   const handleBackdropClick = (e: React.MouseEvent) => {

@@ -174,8 +174,60 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     expenses.push(newExpense);
     await saveExpenses(context.env.SPLITTER_KV, expenses);
 
-    // Send push notifications (non-blocking)
-    context.waitUntil(sendExpenseNotification(context.env, newExpense, 'added'));
+    // Fire-and-forget: Telegram must NOT block the response
+    context.waitUntil((async () => {
+      try {
+        const { notifyMembers, sendTelegramNotification } = await import('./utils/telegram');
+        const isSettlement = newExpense.splitType === 'settlement';
+        const creatorId = (newExpense as Expense & { createdBy?: string }).createdBy ?? newExpense.paidBy;
+
+        const group = await context.env.SPLITTER_KV.get<Group>('group', 'json');
+        const members = group?.members ?? [];
+        const currency = group?.currency ?? '';
+
+        if (isSettlement) {
+          const debtorSplit = newExpense.splits.find((s) => s.memberId !== newExpense.paidBy);
+          if (debtorSplit) {
+            const payerName = getMemberName(members, newExpense.paidBy);
+            const recipientName = getMemberName(members, debtorSplit.memberId);
+            await sendTelegramNotification(
+              debtorSplit.memberId,
+              'settlementRequest',
+              `🤝 <b>Settlement request</b>\n\n<b>${payerName}</b> made a settlement payment to <b>${recipientName}</b>\n💰 Amount: <b>${formatAmount(newExpense.amount, currency)}</b>\n📝 Note: ${newExpense.description}\n\nPlease confirm that you received the money.`,
+              context.env,
+              {
+                inline_keyboard: [
+                  [
+                    { text: '✅ Confirm receipt', callback_data: `settle_accept:${newExpense.id}` },
+                    { text: '❌ Reject', callback_data: `settle_reject:${newExpense.id}` },
+                  ],
+                ],
+              },
+            );
+          }
+        } else {
+          const payerName = getMemberName(members, newExpense.paidBy);
+          const splitsDetail = newExpense.splits
+            .map((s) => `  • ${getMemberName(members, s.memberId)}: ${formatAmount(s.amount, currency)}`)
+            .join('\n');
+          const memberIds = newExpense.splits.map((s) => s.memberId);
+          await notifyMembers(
+            memberIds,
+            creatorId,
+            'newExpense',
+            `💸 <b>New expense</b>\n\n📌 ${newExpense.description}\n👤 Paid by: <b>${payerName}</b>\n💰 Total: <b>${formatAmount(newExpense.amount, currency)}</b>\n\n<b>Each member's share:</b>\n${splitsDetail}`,
+            context.env,
+            {
+              inline_keyboard: [
+                [{ text: '✅ Confirm', callback_data: `signoff:${newExpense.id}` }],
+              ],
+            },
+          );
+        }
+      } catch {
+        // Telegram failure must not affect the API response
+      }
+    })());
 
     return Response.json({
       success: true,
