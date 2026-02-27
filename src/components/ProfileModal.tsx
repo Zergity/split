@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { createAvatar } from '@dicebear/core';
+import { thumbs } from '@dicebear/collection';
 import type { Member } from '../types';
 import { BANKS } from '../constants/banks';
 import { PasskeyList } from './auth';
@@ -8,20 +10,37 @@ interface ProfileModalProps {
   currentUser: Member | null;
   onClose: () => void;
   onSave: (updates: Partial<Member>) => Promise<void>;
+  onLogout?: () => void;
 }
 
-export function ProfileModal({ isOpen, currentUser, onClose, onSave }: ProfileModalProps) {
+export function ProfileModal({ isOpen, currentUser, onClose, onSave, onLogout }: ProfileModalProps) {
   const [name, setName] = useState('');
+  const [avatarSeed, setAvatarSeed] = useState('');
   const [bankId, setBankId] = useState('');
   const [accountName, setAccountName] = useState('');
   const [accountNo, setAccountNo] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [bankDropdownOpen, setBankDropdownOpen] = useState(false);
+  const bankDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close bank dropdown on outside click
+  useEffect(() => {
+    if (!bankDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (bankDropdownRef.current && !bankDropdownRef.current.contains(e.target as Node)) {
+        setBankDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [bankDropdownOpen]);
 
   // Load current user data when modal opens
   useEffect(() => {
     if (isOpen && currentUser) {
       setName(currentUser.name);
+      setAvatarSeed(currentUser.avatarSeed || currentUser.name);
       setBankId(currentUser.bankId || '');
       setAccountName(currentUser.accountName || '');
       setAccountNo(currentUser.accountNo || '');
@@ -96,6 +115,7 @@ export function ProfileModal({ isOpen, currentUser, onClose, onSave }: ProfileMo
     try {
       const updates: Partial<Member> = {
         name: name.trim(),
+        avatarSeed: avatarSeed || name.trim(),
       };
 
       if (hasBankId && hasAccountName && hasAccountNo) {
@@ -128,6 +148,9 @@ export function ProfileModal({ isOpen, currentUser, onClose, onSave }: ProfileMo
   if (!isOpen) return null;
 
   const selectedBank = BANKS.find(b => b.id === bankId);
+  const avatarSvg = createAvatar(thumbs, { seed: avatarSeed || currentUser?.name || '', size: 80 }).toString();
+  const avatarUrl = `data:image/svg+xml;utf8,${encodeURIComponent(avatarSvg)}`;
+  const shortHash = currentUser?.id ? currentUser.id.replace(/-/g, '').slice(0, 6) : '';
 
   return (
     <div
@@ -141,10 +164,30 @@ export function ProfileModal({ isOpen, currentUser, onClose, onSave }: ProfileMo
       >
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-700">
-          <h2 className="text-xl font-bold text-white">Edit Profile</h2>
+          <div className="flex items-center gap-4">
+            {/* Avatar with randomize button */}
+            <div className="relative group shrink-0">
+              <img src={avatarUrl} alt={name} className="w-16 h-16 rounded-full bg-gray-700" />
+              <button
+                type="button"
+                onClick={() => setAvatarSeed(Math.random().toString(36).slice(2, 10))}
+                className="cursor-pointer absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity"
+                title="Randomize avatar"
+              >
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </div>
+            {/* Name + hash */}
+            <div>
+              <h2 className="text-xl font-bold text-white">Hi, {currentUser?.name}</h2>
+              {shortHash && <p className="text-xs text-gray-500 mt-0.5">#{shortHash}</p>}
+            </div>
+          </div>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors"
+            className="cursor-pointer text-gray-400 hover:text-white transition-colors"
             aria-label="Close"
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -185,46 +228,57 @@ export function ProfileModal({ isOpen, currentUser, onClose, onSave }: ProfileMo
               Add your bank account to receive payments via VietQR
             </p>
 
-            {/* Bank selection */}
-            <div className="mb-4">
-              <label htmlFor="bank" className="block text-sm font-medium text-gray-300 mb-2">
-                Bank
-              </label>
+            {/* Bank selection — custom dropdown */}
+            <div className="mb-4" ref={bankDropdownRef}>
+              <label className="block text-sm font-medium text-gray-300 mb-2">Bank</label>
               <div className="relative">
-                <select
-                  id="bank"
-                  value={bankId}
-                  onChange={(e) => setBankId(e.target.value)}
-                  className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none"
+                <button
+                  type="button"
+                  onClick={() => setBankDropdownOpen((v) => !v)}
                   disabled={loading}
+                  className="cursor-pointer w-full flex items-center gap-3 px-4 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
                 >
-                  <option value="">Select a bank</option>
-                  {BANKS.map(bank => (
-                    <option key={bank.id} value={bank.id}>
-                      {bank.name} ({bank.shortName})
-                    </option>
-                  ))}
-                </select>
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  {selectedBank ? (
+                    <>
+                      <img src={selectedBank.logo} alt={selectedBank.name} className="w-7 h-7 object-contain shrink-0" />
+                      <span className="flex-1 text-left">{selectedBank.name}</span>
+                      <span className="text-sm text-gray-400 shrink-0">{selectedBank.shortName}</span>
+                    </>
+                  ) : (
+                    <span className="flex-1 text-left text-gray-400">Select a bank</span>
+                  )}
+                  <svg className="w-5 h-5 text-gray-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                   </svg>
-                </div>
-              </div>
-              {/* Bank logo preview */}
-              {selectedBank && (
-                <div className="mt-3 flex items-center gap-3 p-3 bg-gray-700/50 rounded-lg">
-                  <img
-                    src={selectedBank.logo}
-                    alt={selectedBank.name}
-                    className="w-12 h-12 object-contain"
-                  />
-                  <div>
-                    <div className="font-medium text-white">{selectedBank.name}</div>
-                    <div className="text-sm text-gray-400">{selectedBank.shortName}</div>
+                </button>
+
+                {bankDropdownOpen && (
+                  <div className="absolute z-10 mt-1 w-full max-h-60 overflow-y-auto bg-gray-800 border border-gray-600 rounded-lg shadow-xl">
+                    <button
+                      type="button"
+                      onClick={() => { setBankId(''); setBankDropdownOpen(false); }}
+                      className="cursor-pointer w-full flex items-center px-4 py-2.5 text-gray-400 hover:bg-gray-700 text-sm"
+                    >
+                      Clear selection
+                    </button>
+                    <div className="border-t border-gray-700" />
+                    {BANKS.map(bank => (
+                      <button
+                        key={bank.id}
+                        type="button"
+                        onClick={() => { setBankId(bank.id); setBankDropdownOpen(false); }}
+                        className={`cursor-pointer w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-700 ${
+                          bankId === bank.id ? 'bg-gray-700/60' : ''
+                        }`}
+                      >
+                        <img src={bank.logo} alt={bank.name} className="w-7 h-7 object-contain shrink-0" />
+                        <span className="flex-1 text-left text-white text-sm">{bank.name}</span>
+                        <span className="text-xs text-gray-400 shrink-0">{bank.shortName}</span>
+                      </button>
+                    ))}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             {/* Account name */}
@@ -273,21 +327,23 @@ export function ProfileModal({ isOpen, currentUser, onClose, onSave }: ProfileMo
         </div>
 
         {/* Footer */}
-        <div className="flex gap-3 p-6 border-t border-gray-700">
-          <button
-            onClick={onClose}
-            disabled={loading}
-            className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-700 disabled:opacity-50 text-white rounded-lg transition-colors"
-          >
-            Cancel
-          </button>
+        <div className="flex flex-col gap-3 p-6 border-t border-gray-700">
           <button
             onClick={handleSave}
             disabled={loading}
-            className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600 disabled:opacity-50 text-white rounded-lg transition-colors"
+            className="cursor-pointer w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600 disabled:opacity-50 text-white rounded-lg transition-colors"
           >
             {loading ? 'Saving...' : 'Save'}
           </button>
+          {onLogout && (
+            <button
+              onClick={onLogout}
+              disabled={loading}
+              className="cursor-pointer w-full px-4 py-2 bg-gray-700 hover:bg-red-900/40 text-red-400 rounded-lg transition-colors text-sm"
+            >
+              Sign Out
+            </button>
+          )}
         </div>
       </div>
     </div>

@@ -1,6 +1,8 @@
 import type { AuthEnv } from '../types/auth';
 import { getTokenFromCookies, verifySession } from '../utils/jwt';
 import { notifyMembers } from '../utils/web-push';
+import { notifyMembers as notifyTelegram, sendDebouncedEditNotification } from '../utils/telegram';
+
 type SplitType = 'equal' | 'exact' | 'percentage' | 'shares' | 'settlement';
 
 interface ExpenseSplit {
@@ -34,8 +36,22 @@ async function saveExpenses(kv: KVNamespace, expenses: Expense[]): Promise<void>
   await kv.put('expenses', JSON.stringify(expenses));
 }
 
+interface Member {
+  id: string;
+  name: string;
+}
+
 interface Group {
-  members: { id: string; name: string }[];
+  currency: string;
+  members: Member[];
+}
+
+function getMemberName(members: Member[], id: string): string {
+  return members.find((m) => m.id === id)?.name ?? id;
+}
+
+function formatAmount(amount: number, currency: string): string {
+  return `${amount.toLocaleString('vi-VN')} ${currency}`;
 }
 
 async function sendEditNotification(
@@ -50,7 +66,6 @@ async function sendEditNotification(
   }
   involved.add(expense.paidBy);
 
-  // Exclude the editor
   if (editorId) {
     involved.delete(editorId);
   }
@@ -58,23 +73,59 @@ async function sendEditNotification(
   if (involved.size === 0) return;
 
   const group = await env.SPLITTER_KV.get<Group>('group', 'json');
-  const editorName =
-    (editorId && group?.members.find((m) => m.id === editorId)?.name) || 'Someone';
+  const members = group?.members ?? [];
+  const currency = group?.currency ?? '';
+  const editorName = editorId ? getMemberName(members, editorId) : 'Someone';
+  const involvedIds = [...involved];
 
   const title = action === 'removed' ? 'Expense Removed' : 'Expense Updated';
   const body = action === 'removed'
     ? `${editorName} removed "${expense.description}"`
     : `${editorName} updated "${expense.description}"`;
 
+  // Web push + in-app notification history
   try {
-    await notifyMembers(env, [...involved], {
+    await notifyMembers(env, involvedIds, {
       title,
       body,
       url: action === 'removed' ? '/expenses' : `/edit/${expense.id}`,
       tag: `expense-${expense.id}`,
-    });
+    }, action === 'removed' ? 'expenseDeleted' : 'expenseEdited');
   } catch (err) {
     console.error('Failed to send push notifications:', err);
+  }
+
+  // Telegram notifications
+  try {
+    if (action === 'updated') {
+      const payerName = getMemberName(members, expense.paidBy);
+      const splitsDetail = expense.splits
+        .map((s) => `  • ${getMemberName(members, s.memberId)}: ${formatAmount(s.amount, currency)}`)
+        .join('\n');
+      await sendDebouncedEditNotification(
+        expense.id,
+        expense.splits.map((s) => s.memberId),
+        editorId ?? expense.paidBy,
+        `✏️ <b>Expense updated</b>\n\n📌 ${expense.description}\n👤 Paid by: <b>${payerName}</b>\n✍️ Edited by: <b>${editorName}</b>\n💰 Total: <b>${formatAmount(expense.amount, currency)}</b>\n\n<b>Each member's share:</b>\n${splitsDetail}\n\n⚠️ Please confirm again.`,
+        env,
+        {
+          inline_keyboard: [
+            [{ text: '✅ Confirm again', callback_data: `signoff:${expense.id}` }],
+          ],
+        },
+      );
+    } else {
+      const memberIds = expense.splits.map((s) => s.memberId);
+      await notifyTelegram(
+        memberIds,
+        editorId ?? expense.paidBy,
+        'expenseDeleted',
+        `🗑️ <b>Expense deleted</b>\n\n📌 ${expense.description}\n💰 Total: <b>${formatAmount(expense.amount, currency)}</b>\n🙍 Deleted by: <b>${editorName}</b>`,
+        env,
+      );
+    }
+  } catch (err) {
+    console.error('Failed to send Telegram notifications:', err);
   }
 }
 
@@ -137,8 +188,18 @@ export const onRequestDelete: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
+    const deletedExpense = expenses[index];
     expenses.splice(index, 1);
     await saveExpenses(context.env.SPLITTER_KV, expenses);
+
+    // Send notifications for hard delete
+    let deletorId: string | null = null;
+    const token = getTokenFromCookies(context.request);
+    if (token) {
+      const session = await verifySession(context.env, token);
+      if (session) deletorId = session.memberId;
+    }
+    context.waitUntil(sendEditNotification(context.env, deletedExpense, deletorId, 'removed'));
 
     return Response.json({
       success: true,

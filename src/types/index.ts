@@ -2,6 +2,7 @@
 export interface Member {
   id: string;
   name: string;
+  avatarSeed?: string;
   // Optional bank account fields
   bankId?: string;
   bankName?: string;
@@ -133,4 +134,20 @@ export interface NotificationRecord {
   url?: string;
   createdAt: string;
   read: boolean;
+}
+
+// Telegram notification preferences
+export interface NotifyPrefs {
+  newExpense: boolean;
+  expenseEdited: boolean;
+  expenseDeleted: boolean;
+  settlementRequest: boolean;
+  settlementAccepted: boolean;
+  settlementRejected: boolean;
+}
+
+export interface TelegramStatus {
+  connected: boolean;
+  telegramName?: string | null;
+  notifyPrefs: NotifyPrefs | null;
 }
