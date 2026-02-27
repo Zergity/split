@@ -1,4 +1,4 @@
-import { Group, Expense, ApiResponse, ReceiptOCRResult, NotificationRecord } from '../types';
+import { Group, Expense, ApiResponse, ReceiptOCRResult, NotificationRecord, NotifyPrefs } from '../types';
 import type { Member } from '../types';
 
 const API_BASE = '/api';
@@ -137,6 +137,18 @@ export async function getNotifications(): Promise<NotificationRecord[]> {
 
 export async function markNotificationsRead(): Promise<NotificationRecord[]> {
   return fetchApi<NotificationRecord[]>('/notifications', { method: 'PUT' });
+}
+
+// Push prefs API
+export async function getPushPrefs(): Promise<NotifyPrefs> {
+  return fetchApi<NotifyPrefs>('/push/prefs');
+}
+
+export async function updatePushPrefs(prefs: Partial<NotifyPrefs>): Promise<NotifyPrefs> {
+  return fetchApi<NotifyPrefs>('/push/prefs', {
+    method: 'PATCH',
+    body: JSON.stringify(prefs),
+  });
 }
 
 // Claim/unclaim expense item helper

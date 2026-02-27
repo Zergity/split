@@ -13,6 +13,8 @@ export interface AuthEnv {
   VAPID_PUBLIC_KEY: string;
   VAPID_PRIVATE_KEY: string;
   VAPID_SUBJECT: string;
+  TELEGRAM_BOT_TOKEN: string;
+  TELEGRAM_WEBHOOK_SECRET: string;
 }
 
 // Stored WebAuthn credential for a user
@@ -157,6 +159,7 @@ export const KV_KEYS = {
   telegram: (memberId: string) => `telegram:${memberId}`,
   telegramConnect: (token: string) => `telegram:connect:${token}`,
   telegramChatId: (chatId: string) => `telegram:chatid:${chatId}`,
+  pushPrefs: (memberId: string) => `push-prefs:${memberId}`,
   telegramRejectState: (chatId: string) => `telegram:reject-state:${chatId}`,
   debounceNotify: (expenseId: string) => `debounce:notify:${expenseId}`,
 } as const;
@@ -170,6 +173,9 @@ export const TELEGRAM_REJECT_STATE_TTL_SECONDS = 5 * 60; // 5 minutes
 export const DEBOUNCE_NOTIFY_TTL_SECONDS = 30; // 30 seconds
 
 // Telegram types
+export type NotifyEvent = keyof NotifyPrefs;
+
+
 export interface NotifyPrefs {
   newExpense: boolean;
   expenseEdited: boolean;
@@ -190,6 +196,7 @@ export const DEFAULT_NOTIFY_PREFS: NotifyPrefs = {
 
 export interface TelegramData {
   chatId: string;
+  telegramName?: string;
   connectedAt: string;
   notifyPrefs: NotifyPrefs;
 }

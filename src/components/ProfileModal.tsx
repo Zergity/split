@@ -9,6 +9,7 @@ interface ProfileModalProps {
   currentUser: Member | null;
   onClose: () => void;
   onSave: (updates: Partial<Member>) => Promise<void>;
+  onLogout?: () => void;
 }
 
 type Tab = 'profile' | 'preferences' | 'notifications';
@@ -63,7 +64,7 @@ export function ProfileModal({ isOpen, currentUser, onClose, onSave }: ProfileMo
           <h2 className="text-xl font-bold text-white">Settings</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-white transition-colors"
+            className="cursor-pointer text-gray-400 hover:text-white transition-colors"
             aria-label="Close"
           >
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
