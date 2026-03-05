@@ -1,4 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { createAvatar } from '@dicebear/core';
+import { thumbs } from '@dicebear/collection';
 import { useApp } from '../context/AppContext';
 import { useAuthContext, AuthModal } from './auth';
 import { ProfileModal } from './ProfileModal';
@@ -116,6 +118,13 @@ export function MemberSelector() {
     clearWebAuthnError();
   };
 
+  // Compute avatar at top level (Rules of Hooks: no hooks inside conditionals)
+  const avatarSvg = useMemo(() => {
+    if (!currentUser) return '';
+    return createAvatar(thumbs, { seed: currentUser.avatarSeed || currentUser.name, size: 36 }).toString();
+  }, [currentUser?.name, currentUser?.avatarSeed]);
+  const avatarUrl = currentUser ? `data:image/svg+xml;utf8,${encodeURIComponent(avatarSvg)}` : '';
+
   if (!isSupported) {
     return (
       <div className="text-sm text-red-400">
@@ -133,27 +142,21 @@ export function MemberSelector() {
   if (authenticated && currentUser) {
     return (
       <>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleEditProfile}
-            className="text-sm font-medium text-gray-300 hover:text-cyan-400 hover:underline"
-            title="Click to edit profile"
-          >
-            {currentUser.name}
-          </button>
-          <button
-            onClick={handleLogout}
-            className="text-gray-400 hover:text-gray-200 text-sm"
-          >
-            Logout
-          </button>
-        </div>
+        <button
+          onClick={handleEditProfile}
+          className="cursor-pointer w-9 h-9 rounded-full overflow-hidden shrink-0 hover:opacity-80 transition-opacity"
+          title={currentUser.name}
+          aria-label="Profile"
+        >
+          <img src={avatarUrl} alt={currentUser.name} className="w-full h-full" />
+        </button>
 
         <ProfileModal
           isOpen={authFlow === 'edit-profile'}
           currentUser={currentUser}
           onClose={handleCloseModal}
           onSave={handleProfileSave}
+          onLogout={handleLogout}
         />
       </>
     );
