@@ -54,6 +54,7 @@ export function NotificationBell() {
   // Telegram state
   const [telegram, setTelegram] = useState<TelegramStatus>({ connected: false, notifyPrefs: null });
   const [tgConnecting, setTgConnecting] = useState(false);
+  const [tgFailed, setTgFailed] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // Push prefs state
@@ -80,7 +81,17 @@ export function NotificationBell() {
   // Re-fetch telegram status and push prefs whenever bell opens
   useEffect(() => {
     if (!open || !authenticated) return;
-    getTelegramStatus().then(setTelegram).catch(() => {});
+    getTelegramStatus().then((s) => {
+      if (s.connected) {
+        setTelegram(s);
+        setTgConnecting(false);
+        setTgFailed(false);
+        stopPolling();
+      } else if (!pollRef.current) {
+        // Only overwrite if we're not currently polling for a connection
+        setTelegram(s);
+      }
+    }).catch(() => {});
     api.getPushPrefs().then(setPushPrefs).catch(() => {});
   }, [open, authenticated]);
 
@@ -139,6 +150,7 @@ export function NotificationBell() {
 
   const handleTgConnect = async () => {
     setTgConnecting(true);
+    setTgFailed(false);
     try {
       const { deepLink } = await connectTelegram();
       window.open(deepLink, '_blank');
@@ -154,6 +166,7 @@ export function NotificationBell() {
             stopPolling();
           } else if (attempts >= 40) {
             setTgConnecting(false);
+            setTgFailed(true);
             stopPolling();
           }
         } catch {
@@ -162,6 +175,7 @@ export function NotificationBell() {
       }, 3000);
     } catch {
       setTgConnecting(false);
+      setTgFailed(true);
     }
   };
 
@@ -327,13 +341,15 @@ export function NotificationBell() {
                   <button
                     onClick={telegram.connected ? handleTgDisconnect : handleTgConnect}
                     disabled={tgConnecting}
-                    className={`group cursor-pointer flex items-center gap-2 w-full px-2.5 py-2 rounded text-xs font-medium ${
+                    className={`group flex items-center gap-2 w-full px-2.5 py-2 rounded text-xs font-medium ${
                       telegram.connected
-                        ? 'text-cyan-400 bg-cyan-900/30 hover:bg-red-900/20 hover:text-red-400'
+                        ? 'cursor-pointer text-cyan-400 bg-cyan-900/30 hover:bg-red-900/20 hover:text-red-400'
                         : tgConnecting
                         ? 'text-gray-500 bg-gray-700/50 cursor-not-allowed'
-                        : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700'
-                    } disabled:opacity-50`}
+                        : tgFailed
+                        ? 'cursor-pointer text-red-400 bg-red-900/20 hover:bg-red-900/30'
+                        : 'cursor-pointer text-gray-400 hover:text-gray-200 hover:bg-gray-700'
+                    }`}
                   >
                     {TG_ICON}
                     {telegram.connected ? (
@@ -341,7 +357,7 @@ export function NotificationBell() {
                         <span className="group-hover:hidden">{`@${telegram.telegramName}`}</span>
                         <span className="hidden group-hover:inline">Disconnect</span>
                       </>
-                    ) : tgConnecting ? 'Connecting...' : 'Connect Telegram'}
+                    ) : tgConnecting ? 'Connecting...' : tgFailed ? 'Connection failed — Retry' : 'Connect Telegram'}
                   </button>
                 </div>
 

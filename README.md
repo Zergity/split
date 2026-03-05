@@ -69,19 +69,39 @@ VAPID_PRIVATE_KEY=ExamplePrivateKey...
 pnpm wrangler pages secret put VAPID_PRIVATE_KEY --project-name splitter
 ```
 
-### 4. Set production secrets
+### 4. Set up a Telegram bot (optional)
+
+Required for Telegram notification support.
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram and create a new bot — it will give you a `TELEGRAM_BOT_TOKEN`.
+2. Generate a random webhook secret (e.g. `openssl rand -hex 32`).
+3. Register the webhook once your app is deployed:
+
+```bash
+curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
+  -d "url=https://split.vietcha.in/api/telegram/webhook" \
+  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+```
+
+### 5. Set production secrets
 
 Set these via the Cloudflare dashboard or wrangler CLI — do not commit them:
 
 ```bash
 # A secure random string, at least 32 characters
-pnpm wrangler pages secret put JWT_SECRET --project-name splitter
+pnpm wrangler pages secret put JWT_SECRET --project-name splitter-dev
 
 # Already handled above
-pnpm wrangler pages secret put VAPID_PRIVATE_KEY --project-name splitter
+pnpm wrangler pages secret put VAPID_PRIVATE_KEY --project-name splitter-dev
+
+# From @BotFather (required for Telegram notifications)
+pnpm wrangler pages secret put TELEGRAM_BOT_TOKEN --project-name splitter-dev
+
+# Random secret to validate Telegram webhook requests
+pnpm wrangler pages secret put TELEGRAM_WEBHOOK_SECRET --project-name splitter-dev
 ```
 
-### 5. Update domain config in `wrangler.toml`
+### 6. Update domain config in `wrangler.toml`
 
 ```toml
 [vars]
@@ -93,12 +113,18 @@ VAPID_SUBJECT = "mailto:admin@split.vietcha.in"
 
 ## Local Development
 
-Create a `.dev.vars` file (gitignored) with your local secrets:
+Copy `.dev.vars.example` to `.dev.vars` (gitignored) and fill in the values:
+
+```bash
+cp .dev.vars.example .dev.vars
+```
 
 ```
 JWT_SECRET=dev-secret-not-for-production-use-only
 DEV_MODE=true
-VAPID_PRIVATE_KEY=<your-generated-private-key>
+VAPID_PRIVATE_KEY=<your-generated-vapid-private-key>
+TELEGRAM_BOT_TOKEN=<your-telegram-bot-token>
+TELEGRAM_WEBHOOK_SECRET=<your-random-webhook-secret>
 ```
 
 Then run:

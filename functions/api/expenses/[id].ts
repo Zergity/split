@@ -153,39 +153,16 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
     const updatedExpense = expenses[index];
     await saveExpenses(context.env.SPLITTER_KV, expenses);
 
-    // Fire-and-forget: Telegram notification must NOT block the response.
-    // If Telegram fails, the KV save already succeeded — don't penalize the user.
-    context.waitUntil((async () => {
-      try {
-        const { sendDebouncedEditNotification } = await import('../utils/telegram');
-        const memberIds = updatedExpense.splits.map((s) => s.memberId);
-        const editorId = (updates as Partial<Expense> & { editedBy?: string }).editedBy ?? updatedExpense.paidBy;
+    // Get editor from session (best-effort, don't fail if not authenticated)
+    let editorId: string | null = null;
+    const token = getTokenFromCookies(context.request);
+    if (token) {
+      const session = await verifySession(context.env, token);
+      if (session) editorId = session.memberId;
+    }
 
-        const group = await context.env.SPLITTER_KV.get<Group>('group', 'json');
-        const members = group?.members ?? [];
-        const currency = group?.currency ?? '';
-        const payerName = getMemberName(members, updatedExpense.paidBy);
-        const editorName = getMemberName(members, editorId);
-        const splitsDetail = updatedExpense.splits
-          .map((s) => `  • ${getMemberName(members, s.memberId)}: ${formatAmount(s.amount, currency)}`)
-          .join('\n');
-
-        await sendDebouncedEditNotification(
-          updatedExpense.id,
-          memberIds,
-          editorId,
-          `✏️ <b>Expense updated</b>\n\n📌 ${updatedExpense.description}\n👤 Paid by: <b>${payerName}</b>\n✍️ Edited by: <b>${editorName}</b>\n💰 Total: <b>${formatAmount(updatedExpense.amount, currency)}</b>\n\n<b>Each member's share:</b>\n${splitsDetail}\n\n⚠️ Please confirm again.`,
-          context.env,
-          {
-            inline_keyboard: [
-              [{ text: '✅ Confirm again', callback_data: `signoff:${updatedExpense.id}` }],
-            ],
-          },
-        );
-      } catch {
-        // Telegram failure must not affect the API response
-      }
-    })());
+    const isDeleted = updatedExpense.tags?.includes('deleted');
+    context.waitUntil(sendEditNotification(context.env, updatedExpense, editorId, isDeleted ? 'removed' : 'updated'));
 
     return Response.json({
       success: true,
