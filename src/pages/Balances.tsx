@@ -86,20 +86,18 @@ export function Balances() {
                     className="bg-gray-800 rounded-lg border border-gray-700 p-3 flex items-center justify-between gap-2"
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <span
-                        className={`font-medium truncate ${
-                          settlement.from === currentUser?.id ? 'text-yellow-400' : ''
-                        }`}
-                      >
-                        {settlement.from === currentUser?.id ? `[${settlement.fromName}]` : settlement.fromName}
+                      <span className="font-medium truncate flex items-center gap-1">
+                        {settlement.fromName}
+                        {settlement.from === currentUser?.id && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded px-1 py-0.5 flex-shrink-0">you</span>
+                        )}
                       </span>
                       <span className="text-gray-500 flex-shrink-0">→</span>
-                      <span
-                        className={`font-medium truncate ${
-                          settlement.to === currentUser?.id ? 'text-yellow-400' : ''
-                        }`}
-                      >
-                        {settlement.to === currentUser?.id ? `[${settlement.toName}]` : settlement.toName}
+                      <span className="font-medium truncate flex items-center gap-1">
+                        {settlement.toName}
+                        {settlement.to === currentUser?.id && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded px-1 py-0.5 flex-shrink-0">you</span>
+                        )}
                       </span>
                     </div>
                     <div className="flex items-center gap-3 flex-shrink-0">

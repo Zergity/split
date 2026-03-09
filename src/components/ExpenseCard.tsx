@@ -66,7 +66,14 @@ export function ExpenseCard({
   const getMemberName = (id: string) => {
     const member = members.find((m) => m.id === id);
     const name = member?.name || 'Unknown';
-    if (currentUser && id === currentUser.id) return <>[{name}]</>;
+    if (currentUser && id === currentUser.id) {
+      return (
+        <>
+          {name}
+          <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded px-1 py-0.5">you</span>
+        </>
+      );
+    }
     return name;
   };
 
@@ -105,13 +112,9 @@ export function ExpenseCard({
                 )}
               </div>
               <p className="text-sm mt-2">
-                <span className={currentUser && payer?.id === currentUser.id ? 'text-yellow-400 font-medium' : 'text-gray-100'}>
-                  {currentUser && payer?.id === currentUser.id ? `[${payer?.name || 'Unknown'}]` : (payer?.name || 'Unknown')}
-                </span>
+                <span className="text-gray-100">{getMemberName(payer?.id ?? '')}</span>
                 <span className="text-gray-500 mx-2">paid</span>
-                <span className={currentUser && recipient?.id === currentUser.id ? 'text-yellow-400 font-medium' : 'text-gray-100'}>
-                  {currentUser && recipient?.id === currentUser.id ? `[${recipient?.name || 'Unknown'}]` : (recipient?.name || 'Unknown')}
-                </span>
+                <span className="text-gray-100">{getMemberName(recipient?.id ?? '')}</span>
               </p>
             </>
           ) : (
@@ -128,13 +131,9 @@ export function ExpenseCard({
                 )}
               </div>
               <p className="text-sm text-gray-400">
-                Paid by {currentUser && payer?.id === currentUser.id ? (
-                  <span className="text-yellow-400">[{payer?.name || 'Unknown'}]</span>
-                ) : (payer?.name || 'Unknown')}
+                Paid by <span className="text-gray-200">{getMemberName(payer?.id ?? '')}</span>
                 {creator && creator.id !== expense.paidBy && (
-                  <span className="text-gray-500"> (added by {currentUser && creator.id === currentUser.id ? (
-                    <span className="text-yellow-400">[{creator.name}]</span>
-                  ) : creator.name})</span>
+                  <span className="text-gray-500"> (added by {getMemberName(creator.id)})</span>
                 )}
               </p>
             </>

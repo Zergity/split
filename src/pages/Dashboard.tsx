@@ -185,10 +185,11 @@ export function Dashboard() {
                   >
                     <div>
                       <p className="font-medium">{expense.description}</p>
-                      <p className="text-gray-400 text-xs">
-                        by {currentUser && payer?.id === currentUser.id ? (
-                          <span className="text-yellow-400">[{payer?.name || 'Unknown'}]</span>
-                        ) : (payer?.name || 'Unknown')}
+                      <p className="text-gray-400 text-xs flex items-center gap-1 flex-wrap">
+                        by <span className="text-gray-200">{payer?.name || 'Unknown'}</span>
+                        {currentUser && payer?.id === currentUser.id && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded px-1 py-0.5">you</span>
+                        )}
                         <span className="mx-1">•</span>
                         {formatRelativeTime(expense.createdAt)}
                       </p>
