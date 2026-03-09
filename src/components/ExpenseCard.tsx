@@ -278,7 +278,7 @@ export function ExpenseCard({
               <span className="text-green-400">Confirmed by recipient</span>
             ) : (
               <span className="text-yellow-400">
-                Awaiting confirmation from {recipient && currentUser && recipient.id === currentUser.id ? `[${recipient?.name || 'recipient'}]` : (recipient?.name || 'recipient')}
+                Awaiting confirmation from {getMemberName(recipient?.id ?? '')}
               </span>
             )}
           </div>
