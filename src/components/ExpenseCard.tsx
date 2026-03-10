@@ -331,15 +331,15 @@ export function ExpenseCard({
           {/* Collapsed view: no user split, show summary */}
           {!expanded && !userSplit && (
             <div
-              className="cursor-pointer"
+              className="cursor-pointer flex justify-between items-center"
               onClick={() => setExpanded(true)}
             >
               <p className="text-sm text-gray-400">
                 {expense.splits.length} participant{expense.splits.length !== 1 ? 's' : ''}
               </p>
-              <p className="text-xs text-cyan-400 mt-1">
-                Tap to see details
-              </p>
+              <svg className="w-4 h-4 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
             </div>
           )}
 
@@ -391,7 +391,7 @@ export function ExpenseCard({
                                 <span className="text-xs">...</span>
                               ) : (
                                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                                 </svg>
                               )}
                             </button>
@@ -427,7 +427,7 @@ export function ExpenseCard({
                                         <span className="text-xs">...</span>
                                       ) : (
                                         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M6 18L18 6M6 6l12 12" />
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                                         </svg>
                                       )}
                                     </button>
@@ -516,9 +516,12 @@ export function ExpenseCard({
             <div className="mt-2 pt-2 border-t border-gray-700">
               <button
                 onClick={() => setExpanded(true)}
-                className="text-xs text-orange-400 hover:text-orange-300"
+                className="text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1"
               >
-                {unclaimedCount} unclaimed item{unclaimedCount !== 1 ? 's' : ''} - tap to view
+                {unclaimedCount} unclaimed item{unclaimedCount !== 1 ? 's' : ''}
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
               </button>
             </div>
           )}
