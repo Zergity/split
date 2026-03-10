@@ -4,6 +4,7 @@ import { Expense, Member } from '../types';
 import { formatCurrency, formatRelativeTime, getTagColor, isDeleted } from '../utils/balances';
 import { SignOffButton } from './SignOffButton';
 import { useApp } from '../context/AppContext';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface ExpenseCardProps {
   expense: Expense;
@@ -30,18 +31,23 @@ export function ExpenseCard({
   const [savingTags, setSavingTags] = useState(false);
   const [claimingItemId, setClaimingItemId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const handleDelete = async () => {
     if (onDelete) {
       onDelete();
     } else {
-      if (!confirm('Are you sure you want to delete this transaction?')) return;
-      setDeleting(true);
-      try {
-        await deleteExpense(expense);
-      } finally {
-        setDeleting(false);
-      }
+      setShowDeleteConfirm(true);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    setShowDeleteConfirm(false);
+    setDeleting(true);
+    try {
+      await deleteExpense(expense);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -603,6 +609,17 @@ export function ExpenseCard({
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        title="Delete transaction"
+        message={`Are you sure you want to delete "${expense.description}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        destructive
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
     </div>
   );
 }
