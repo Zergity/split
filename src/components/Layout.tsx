@@ -31,16 +31,42 @@ export function Layout({ children }: LayoutProps) {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg text-gray-400">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-gray-900">
+        <div className="flex flex-col items-center gap-3">
+          <svg
+            className="w-10 h-10 text-cyan-500 animate-spin"
+            fill="none"
+            viewBox="0 0 24 24"
+          >
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <p className="text-sm text-gray-400">Loading...</p>
+        </div>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg text-red-400">Error: {error}</div>
+      <div className="min-h-screen flex items-center justify-center bg-gray-900 p-4">
+        <div className="bg-gray-800 border border-red-700 rounded-xl p-6 max-w-sm w-full text-center space-y-4">
+          <div className="w-12 h-12 mx-auto rounded-full bg-red-900/40 flex items-center justify-center">
+            <svg className="w-6 h-6 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+          </div>
+          <div>
+            <p className="font-semibold text-gray-100">Something went wrong</p>
+            <p className="text-sm text-gray-400 mt-1">{error}</p>
+          </div>
+          <button
+            onClick={handleReload}
+            className="w-full py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-sm font-medium"
+          >
+            Try again
+          </button>
+        </div>
       </div>
     );
   }
