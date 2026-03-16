@@ -1,4 +1,4 @@
-import { Expense, Member, MemberBalance, Settlement } from '../types';
+import { Expense, Member, MemberBalance, Settlement, DiscountType } from '../types';
 
 // Check if an expense is soft-deleted
 export function isDeleted(expense: Expense): boolean {
@@ -225,7 +225,7 @@ export function getTagColor(tag: string): { bg: string; text: string; hoverBg: s
 
 export function calculateDiscountAmount(
   discount: number | undefined,
-  discountType: 'percentage' | 'flat' | undefined,
+  discountType: DiscountType | undefined,
   total: number
 ): number {
   if (!discount || discount <= 0 || total <= 0) return 0;
@@ -238,7 +238,7 @@ export function calculateDiscountAmount(
 export function calculateBillGoc(
   total: number,
   discount: number | undefined,
-  discountType: 'percentage' | 'flat' | undefined
+  discountType: DiscountType | undefined
 ): number {
   return roundNumber(total + calculateDiscountAmount(discount, discountType, total), 2);
 }
