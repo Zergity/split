@@ -305,7 +305,7 @@ export function AddExpense() {
         await createExpense({
           description: description.trim(), amount: totalAmount, paidBy,
           createdBy: currentUser.id, splitType: 'exact', splits,
-          items: discountedItems, discount,
+          items, discount,
           discountType: discount ? discountType : undefined,
           tags: tags.length > 0 ? tags : undefined, receiptDate,
         });
@@ -608,9 +608,10 @@ export function AddExpense() {
               <label className="block text-sm font-medium text-gray-300">Amounts</label>
               {includedMemberIds.size > 0 && (
                 <button type="button" onClick={() => {
-                  if (discountedItems.length === 0) return;
-                  const splitAmount = roundNumber(totalAmount / discountedItems.length, 2);
-                  handleItemsChange(discountedItems.map(item => ({ ...item, amount: splitAmount })));
+                  if (items.length === 0) return;
+                  const rawTotal = items.reduce((sum, i) => sum + i.amount, 0);
+                  const splitAmount = roundNumber(rawTotal / items.length, 2);
+                  handleItemsChange(items.map(item => ({ ...item, amount: splitAmount })));
                 }} className="text-sm text-cyan-400 hover:text-cyan-300">Split equally</button>
               )}
             </div>

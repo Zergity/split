@@ -318,7 +318,7 @@ export function EditExpense() {
           paidBy,
           splitType: 'exact',
           splits,
-          items: discountedItems,
+          items,
           discount,
           discountType: discount ? discountType : undefined,
         });
@@ -517,62 +517,8 @@ export function EditExpense() {
           </div>
         )}
 
-        {/* Discount - show when items exist or shares mode with amount */}
-        {items.length > 0 && !canOnlyAssign && !canOnlyEditOwnItems && (
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Discount
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min="0"
-                step={discountType === 'percentage' ? '1' : '1000'}
-                value={discount || ''}
-                onChange={(e) => {
-                  const value = e.target.value ? parseFloat(e.target.value) : undefined;
-                  if (discountType === 'percentage') {
-                    setDiscount(value && value > 0 && value <= 100 ? value : undefined);
-                  } else {
-                    setDiscount(value && value > 0 ? value : undefined);
-                  }
-                }}
-                placeholder="0"
-                className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100"
-              />
-              <select
-                value={discountType}
-                onChange={(e) => {
-                  setDiscountType(e.target.value as DiscountType);
-                  setDiscount(undefined);
-                }}
-                className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-gray-100 text-sm"
-              >
-                <option value="percentage">%</option>
-                <option value="flat">đ</option>
-              </select>
-              <span className="text-gray-400 text-sm">
-                {discount
-                  ? discountType === 'percentage'
-                    ? `${discount}% off all items`
-                    : `${discount.toLocaleString()}đ off`
-                  : 'No discount'}
-              </span>
-              {discount && (
-                <button
-                  type="button"
-                  onClick={() => setDiscount(undefined)}
-                  className="text-red-400 hover:text-red-300 text-sm"
-                >
-                  Remove
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Shares discount - show in shares mode when amount set */}
-        {splitMode === 'shares' && sharesTotalAmount > 0 && !canOnlyAssign && !canOnlyEditOwnItems && (
+        {/* Discount */}
+        {(items.length > 0 || (splitMode === 'shares' && sharesTotalAmount > 0)) && !canOnlyAssign && !canOnlyEditOwnItems && (
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">
               Discount
@@ -636,9 +582,10 @@ export function EditExpense() {
                 <button
                   type="button"
                   onClick={() => {
-                    if (discountedItems.length === 0) return;
-                    const splitAmount = roundNumber(totalAmount / discountedItems.length, 2);
-                    handleItemsChange(discountedItems.map(item => ({ ...item, amount: splitAmount })));
+                    if (items.length === 0) return;
+                    const rawTotal = items.reduce((sum, i) => sum + i.amount, 0);
+                    const splitAmount = roundNumber(rawTotal / items.length, 2);
+                    handleItemsChange(items.map(item => ({ ...item, amount: splitAmount })));
                   }}
                   className="text-sm text-cyan-400 hover:text-cyan-300"
                 >
