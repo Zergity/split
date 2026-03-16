@@ -356,7 +356,16 @@ export function ExpenseCard({
                 className="flex justify-between items-center mb-2 cursor-pointer"
                 onClick={() => setExpanded(false)}
               >
-                <p className="text-xs text-gray-500">Split ({expense.splitType})</p>
+                <p className="text-xs text-gray-500">
+                  Split ({expense.splitType === 'shares' ? 'by shares' : expense.splitType})
+                  {expense.discount && (
+                    <span className="ml-1">
+                      · {expense.discountType === 'flat'
+                        ? `${expense.discount.toLocaleString()}đ off`
+                        : `${expense.discount}% off`}
+                    </span>
+                  )}
+                </p>
                 <svg className="w-4 h-4 text-cyan-500 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
