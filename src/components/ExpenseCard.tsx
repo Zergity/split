@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Expense, Member } from '../types';
-import { formatCurrency, formatRelativeTime, getTagColor, isDeleted } from '../utils/balances';
+import { calculateDiscountAmount, formatCurrency, formatRelativeTime, getTagColor, isDeleted } from '../utils/balances';
 import { SignOffButton } from './SignOffButton';
 import { useApp } from '../context/AppContext';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -358,11 +358,9 @@ export function ExpenseCard({
               >
                 <p className="text-xs text-gray-500">
                   Split ({expense.splitType === 'shares' ? 'by shares' : expense.splitType})
-                  {expense.discount && (
+                  {expense.splitType !== 'shares' && expense.discount && (
                     <span className="ml-1">
-                      · {expense.discountType === 'flat'
-                        ? `${expense.discount.toLocaleString()}đ off`
-                        : `${expense.discount}% off`}
+                      · −{formatCurrency(calculateDiscountAmount(expense.discount, expense.discountType, expense.amount), currency)}
                     </span>
                   )}
                 </p>
