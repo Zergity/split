@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { ReceiptCapture } from '../components/ReceiptCapture';
 import { ReceiptItems } from '../components/ReceiptItems';
-import { ReceiptItem, ReceiptOCRResult } from '../types';
+import { ReceiptItem, ReceiptOCRResult, DiscountType } from '../types';
 import { roundNumber, getTagColor } from '../utils/balances';
 
 export function AddExpense() {
@@ -17,6 +17,7 @@ export function AddExpense() {
   const [receiptDate, setReceiptDate] = useState<string | undefined>(undefined);
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [discount, setDiscount] = useState<number | undefined>(undefined);
+  const [discountType, setDiscountType] = useState<DiscountType>('percentage');
   const [manualTotal, setManualTotal] = useState<number | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [tags, setTags] = useState<string[]>([]);
@@ -58,17 +59,35 @@ export function AddExpense() {
 
   const showCreateOption = tagInput.trim() && filteredSuggestions.length === 0;
 
+  const discountedItems = useMemo(() => {
+    if (!discount || items.length === 0) return items;
+
+    const subtotal = items.reduce((sum, i) => sum + i.amount, 0);
+    let discountPercent: number;
+
+    if (discountType === 'flat') {
+      discountPercent = subtotal > 0 ? (discount / subtotal) * 100 : 0;
+    } else {
+      discountPercent = discount;
+    }
+
+    return items.map(item => ({
+      ...item,
+      amount: roundNumber(item.amount * (1 - discountPercent / 100), 2),
+    }));
+  }, [items, discount, discountType]);
+
   // Calculate totals from items, or use manual total if set
-  const itemsTotal = items.reduce((sum, i) => sum + i.amount, 0);
+  const itemsTotal = discountedItems.reduce((sum, i) => sum + i.amount, 0);
   const totalAmount = manualTotal !== null ? manualTotal : itemsTotal;
 
   // Calculate which members are included (have at least one item assigned)
-  const includedMemberIds = new Set(items.filter(i => i.memberId).map(i => i.memberId!));
+  const includedMemberIds = new Set(discountedItems.filter(i => i.memberId).map(i => i.memberId!));
 
   // Calculate splits from items, payer takes the rest
   const calculateSplits = () => {
     const memberTotals = new Map<string, number>();
-    for (const item of items) {
+    for (const item of discountedItems) {
       if (item.memberId && item.amount > 0) {
         const current = memberTotals.get(item.memberId) || 0;
         memberTotals.set(item.memberId, roundNumber(current + item.amount, 2));
@@ -89,12 +108,11 @@ export function AddExpense() {
   };
 
   const handleReceiptProcessed = (result: ReceiptOCRResult) => {
-    // Store items without discount applied - discount will be applied via handleDiscountChange
     setItems(result.extracted.items);
 
-    // Set discount (will trigger recalculation if > 0)
     if (result.extracted.discount && result.extracted.discount > 0) {
-      handleDiscountChange(result.extracted.discount, result.extracted.items);
+      setDiscount(result.extracted.discount);
+      setDiscountType('percentage'); // OCR always returns percentage
     } else {
       setDiscount(undefined);
     }
@@ -107,39 +125,6 @@ export function AddExpense() {
     }
   };
 
-  // Handle discount change - recalculate all item amounts
-  const handleDiscountChange = (newDiscount: number | undefined, currentItems?: ReceiptItem[]) => {
-    const itemsToUpdate = currentItems || items;
-    const oldDiscount = discount || 0;
-    const newDiscountValue = newDiscount || 0;
-
-    if (itemsToUpdate.length === 0) {
-      setDiscount(newDiscount);
-      return;
-    }
-
-    // Reverse old discount and apply new discount
-    const updatedItems = itemsToUpdate.map(item => {
-      // Reverse old discount to get original amount
-      const originalAmount = oldDiscount > 0
-        ? item.amount / (1 - oldDiscount / 100)
-        : item.amount;
-
-      // Apply new discount
-      const newAmount = newDiscountValue > 0
-        ? originalAmount * (1 - newDiscountValue / 100)
-        : originalAmount;
-
-      return {
-        ...item,
-        amount: roundNumber(newAmount, 2),
-      };
-    });
-
-    setItems(updatedItems);
-    setDiscount(newDiscount && newDiscount > 0 ? newDiscount : undefined);
-  };
-
   const handleReceiptError = (errorMessage: string) => {
     setError(errorMessage);
   };
@@ -147,6 +132,7 @@ export function AddExpense() {
   const handleClearReceipt = () => {
     setItems([]);
     setDiscount(undefined);
+    setDiscountType('percentage');
     setReceiptDate(undefined);
     setDescription('');
     setManualTotal(null);
@@ -284,8 +270,9 @@ export function AddExpense() {
         createdBy: currentUser.id,
         splitType: 'exact',
         splits,
-        items, // Store items for later editing
-        discount, // Store discount percentage
+        items: discountedItems,
+        discount,
+        discountType: discount ? discountType : undefined,
         tags: tags.length > 0 ? tags : undefined,
         receiptDate,
       });
@@ -494,7 +481,7 @@ export function AddExpense() {
                 value={discount || ''}
                 onChange={(e) => {
                   const value = e.target.value ? parseFloat(e.target.value) : undefined;
-                  handleDiscountChange(value && value > 0 && value <= 100 ? value : undefined);
+                  setDiscount(value && value > 0 && value <= 100 ? value : undefined);
                 }}
                 placeholder="0"
                 className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100"
@@ -505,7 +492,7 @@ export function AddExpense() {
               {discount && (
                 <button
                   type="button"
-                  onClick={() => handleDiscountChange(undefined)}
+                  onClick={() => setDiscount(undefined)}
                   className="text-red-400 hover:text-red-300 text-sm"
                 >
                   Remove
@@ -541,7 +528,7 @@ export function AddExpense() {
             )}
           </div>
           <ReceiptItems
-            items={items}
+            items={discountedItems}
             members={group.members}
             currency={group.currency}
             totalAmount={totalAmount}
