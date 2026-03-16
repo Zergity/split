@@ -222,3 +222,23 @@ export function getTagColor(tag: string): { bg: string; text: string; hoverBg: s
   const index = Math.abs(hash) % TAG_COLORS.length;
   return TAG_COLORS[index];
 }
+
+export function calculateDiscountAmount(
+  discount: number | undefined,
+  discountType: 'percentage' | 'flat' | undefined,
+  total: number
+): number {
+  if (!discount || discount <= 0 || total <= 0) return 0;
+  if (discountType === 'flat') return discount;
+  const pct = discount / 100;
+  if (pct >= 1) return 0;
+  return roundNumber(total * pct / (1 - pct), 2);
+}
+
+export function calculateBillGoc(
+  total: number,
+  discount: number | undefined,
+  discountType: 'percentage' | 'flat' | undefined
+): number {
+  return roundNumber(total + calculateDiscountAmount(discount, discountType, total), 2);
+}
