@@ -1,30 +1,28 @@
 import { useState } from 'react';
 import { ReceiptItem, Member } from '../types';
 import { useApp } from '../context/AppContext';
+import { roundNumber } from '../utils/balances';
 
 interface ReceiptItemsProps {
   items: ReceiptItem[];
   members: Member[];
   currency: string;
-  totalAmount: number;
-  onTotalChange: (total: string) => void;
+  discountAmount?: number;
+  billGoc?: number;
   onChange: (items: ReceiptItem[]) => void;
   payerId?: string;
   selectedItemId?: string | null;
   onItemSelect?: (itemId: string) => void;
-  assignOnly?: boolean; // If true, can only assign members to unassigned items
-  editableItemIds?: Set<string>; // If set, only these items can have their descriptions edited
+  assignOnly?: boolean;
+  editableItemIds?: Set<string>;
 }
 
-export function ReceiptItems({ items, members, currency, totalAmount, onTotalChange, onChange, payerId, selectedItemId, onItemSelect, assignOnly = false, editableItemIds }: ReceiptItemsProps) {
+export function ReceiptItems({ items, members, currency, discountAmount, billGoc, onChange, payerId, selectedItemId, onItemSelect, assignOnly = false, editableItemIds }: ReceiptItemsProps) {
   const { currentUser } = useApp();
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const [dragOverAddButton, setDragOverAddButton] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
-  const [editingTotal, setEditingTotal] = useState(false);
-  const [totalValue, setTotalValue] = useState('');
-
   const handleDragOver = (e: React.DragEvent, itemId: string) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = 'copy';
@@ -134,46 +132,8 @@ export function ReceiptItems({ items, members, currency, totalAmount, onTotalCha
     onChange([...items, newItem]);
   };
 
-  const handleTotalFocus = () => {
-    setEditingTotal(true);
-    setTotalValue(totalAmount > 0 ? totalAmount.toString() : '');
-  };
-
-  const handleTotalBlur = () => {
-    if (editingTotal) {
-      onTotalChange(totalValue);
-      setEditingTotal(false);
-      setTotalValue('');
-    }
-  };
-
-  const handleTotalInputChange = (value: string) => {
-    const sanitized = value.replace(/[^0-9.,]/g, '').replace(',', '.');
-    setTotalValue(sanitized);
-  };
-
   return (
     <div className="space-y-2">
-      {/* Total row - editable */}
-      <div className="flex items-center gap-2 p-2 rounded-lg bg-cyan-900/30 border border-cyan-600">
-        <span className="w-20 flex-shrink-0" />
-        <span className="flex-1 text-sm font-semibold text-cyan-100">Total</span>
-        <div className="flex items-center gap-1">
-          <input
-            type="text"
-            inputMode="decimal"
-            value={editingTotal ? totalValue : totalAmount.toString()}
-            onChange={(e) => handleTotalInputChange(e.target.value)}
-            onFocus={handleTotalFocus}
-            onBlur={handleTotalBlur}
-            disabled={assignOnly}
-            className="w-16 bg-gray-700 border border-cyan-600 rounded px-2 py-1 text-right text-sm font-semibold text-cyan-100 disabled:opacity-50"
-          />
-          <span className="text-xs text-cyan-300">{currency}</span>
-        </div>
-        <span className="w-6" />
-      </div>
-      
       {/* Items */}
       {items.map(item => {
         const isOver = dragOverItemId === item.id;
@@ -181,13 +141,17 @@ export function ReceiptItems({ items, members, currency, totalAmount, onTotalCha
         const isEditing = editingId === item.id;
         const isSelected = selectedItemId === item.id;
 
+        const showDiscount = (discountAmount ?? 0) > 0 && (billGoc ?? 0) > 0;
+        const itemDiscountAmount = showDiscount ? roundNumber(discountAmount! * (item.amount / billGoc!), 2) : 0;
+        const itemFinalAmount = showDiscount ? roundNumber(item.amount - itemDiscountAmount, 2) : 0;
+
         return (
           <div
             key={item.id}
             onDragOver={(e) => handleDragOver(e, item.id)}
             onDragLeave={handleDragLeave}
             onDrop={(e) => handleDrop(e, item.id)}
-            className={`flex items-center gap-2 p-2 rounded-lg transition-all ${
+            className={`flex flex-col gap-1 p-2 rounded-lg transition-all ${
               isSelected
                 ? 'bg-yellow-900/50 border-2 border-yellow-500'
                 : isOver
@@ -195,6 +159,7 @@ export function ReceiptItems({ items, members, currency, totalAmount, onTotalCha
                 : 'bg-gray-800'
             }`}
           >
+          <div className="flex items-center gap-2">
             {/* Assigned member or empty drop zone (clickable to select) */}
             <div className="w-20 flex-shrink-0">
               {assignedMember ? (
@@ -262,6 +227,12 @@ export function ReceiptItems({ items, members, currency, totalAmount, onTotalCha
                 </svg>
               </button>
             )}
+          </div>
+          {showDiscount && (
+            <p className="text-xs text-orange-400 pl-[5.5rem]">
+              Giảm {itemDiscountAmount}đ → Trả {itemFinalAmount}đ
+            </p>
+          )}
           </div>
         );
       })}
