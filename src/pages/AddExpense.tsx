@@ -4,7 +4,7 @@ import { useApp } from '../context/AppContext';
 import { ReceiptCapture } from '../components/ReceiptCapture';
 import { ReceiptItems } from '../components/ReceiptItems';
 import { ReceiptItem, ReceiptOCRResult, DiscountType } from '../types';
-import { roundNumber, getTagColor } from '../utils/balances';
+import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc } from '../utils/balances';
 
 export function AddExpense() {
   const navigate = useNavigate();
@@ -18,16 +18,14 @@ export function AddExpense() {
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [discount, setDiscount] = useState<number | undefined>(undefined);
   const [discountType, setDiscountType] = useState<DiscountType>('percentage');
-  const [manualTotal, setManualTotal] = useState<number | null>(null);
+  const [totalAmount, setTotalAmount] = useState<number>(0);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
 
-  // Task 4: shares mode state
   const [splitMode, setSplitMode] = useState<'items' | 'shares'>('items');
   const [memberShares, setMemberShares] = useState<Record<string, number>>({});
-  const [sharesTotalAmount, setSharesTotalAmount] = useState<number>(0);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -64,69 +62,82 @@ export function AddExpense() {
 
   const showCreateOption = tagInput.trim() && filteredSuggestions.length === 0;
 
-  const discountedItems = useMemo(() => {
-    if (!discount || items.length === 0) return items;
+  const hasItems = items.length > 0;
 
-    const subtotal = items.reduce((sum, i) => sum + i.amount, 0);
-    let discountPercent: number;
-
-    if (discountType === 'flat') {
-      discountPercent = subtotal > 0 ? (discount / subtotal) * 100 : 0;
-    } else {
-      discountPercent = discount;
-    }
-
-    return items.map(item => ({
-      ...item,
-      amount: roundNumber(item.amount * (1 - discountPercent / 100), 2),
-    }));
-  }, [items, discount, discountType]);
-
-  // Calculate totals from items, or use manual total if set
-  const itemsTotal = discountedItems.reduce((sum, i) => sum + i.amount, 0);
-  const totalAmount = manualTotal !== null ? manualTotal : itemsTotal;
-
-  // Task 4: shares computed values
   const totalShares = Object.values(memberShares).reduce((sum, s) => sum + s, 0);
   const allSharesEqual = totalShares > 0 && Object.values(memberShares).every(s => s === 1);
 
-  const sharesDiscountAmount = useMemo(() => {
-    if (!discount || sharesTotalAmount <= 0) return 0;
-    if (discountType === 'flat') return discount;
-    return roundNumber(sharesTotalAmount * discount / 100, 2);
-  }, [discount, discountType, sharesTotalAmount]);
+  const billGoc = useMemo(() => {
+    if (splitMode !== 'items') return totalAmount;
+    if (items.length > 0) {
+      return roundNumber(items.reduce((sum, item) => sum + item.amount, 0), 2);
+    }
+    return calculateBillGoc(totalAmount, discount, discountType);
+  }, [items, totalAmount, discount, discountType, splitMode]);
 
-  const sharesEffectiveTotal = Math.max(0, sharesTotalAmount - sharesDiscountAmount);
+  const discountAmount = useMemo(() => {
+    if (splitMode !== 'items') return 0;
+    if (items.length > 0) {
+      const bg = items.reduce((sum, item) => sum + item.amount, 0);
+      if (!discount || discount <= 0) return 0;
+      if (discountType === 'flat') return discount;
+      return roundNumber(bg * (discount / 100), 2);
+    }
+    return calculateDiscountAmount(discount, discountType, totalAmount);
+  }, [items, totalAmount, discount, discountType, splitMode]);
 
-  // Task 4: Calculate which members are included
   const includedMemberIds = splitMode === 'items'
-    ? new Set(discountedItems.filter(i => i.memberId).map(i => i.memberId!))
+    ? new Set(items.filter(i => i.memberId).map(i => i.memberId!))
     : new Set(Object.keys(memberShares));
 
-  // Calculate splits from items, payer takes the rest
-  const calculateSplits = () => {
-    const memberTotals = new Map<string, number>();
-    for (const item of discountedItems) {
-      if (item.memberId && item.amount > 0) {
-        const current = memberTotals.get(item.memberId) || 0;
-        memberTotals.set(item.memberId, roundNumber(current + item.amount, 2));
-      }
+  const handleItemsChange = (newItems: ReceiptItem[]) => {
+    const newBillGoc = newItems.reduce((sum, i) => sum + i.amount, 0);
+    const newDiscountAmount = discountType === 'flat'
+      ? (discount ?? 0)
+      : newBillGoc * ((discount ?? 0) / 100);
+    const newTotal = roundNumber(newBillGoc - newDiscountAmount, 2);
+    setItems(newItems);
+    setTotalAmount(Math.max(0, newTotal));
+    if (newItems.length === 0) {
+      setDiscount(undefined);
     }
-
-    // Payer takes the difference between total and items sum
-    if (paidBy && totalAmount > 0) {
-      const currentItemsSum = Array.from(memberTotals.values()).reduce((sum, v) => sum + v, 0);
-      const diff = roundNumber(totalAmount - currentItemsSum, 2);
-      if (Math.abs(diff) > 0.001) {
-        const payerCurrent = memberTotals.get(paidBy) || 0;
-        memberTotals.set(paidBy, roundNumber(payerCurrent + diff, 2));
-      }
-    }
-
-    return memberTotals;
   };
 
-  // Task 4: mode switch handler
+  const handleTotalChange = (value: string) => {
+    const parsed = parseFloat(value);
+    if (!isNaN(parsed) && parsed >= 0) {
+      const newBillGoc = calculateBillGoc(parsed, discount, discountType);
+      const currentBillGoc = items.reduce((sum, i) => sum + i.amount, 0);
+      const diff = roundNumber(newBillGoc - currentBillGoc, 2);
+
+      if (Math.abs(diff) > 0.001) {
+        const payerItems = items.filter(i => i.memberId === paidBy);
+        if (payerItems.length > 0) {
+          const firstPayerItem = payerItems[0];
+          const newItemAmount = roundNumber(firstPayerItem.amount + diff, 2);
+          if (newItemAmount < 0) {
+            setError('Adjustment would make item amount negative');
+            return;
+          }
+          setItems(items.map(item =>
+            item.id === firstPayerItem.id ? { ...item, amount: newItemAmount } : item
+          ));
+        } else if (items.length === 0 || paidBy) {
+          const newItem: ReceiptItem = {
+            id: crypto.randomUUID(),
+            description: '',
+            amount: newBillGoc,
+            memberId: paidBy || undefined,
+          };
+          setItems(newItem.amount > 0 ? [newItem] : []);
+        }
+      }
+      setTotalAmount(parsed);
+    } else if (value === '' || value === '0') {
+      setTotalAmount(0);
+    }
+  };
+
   const handleSplitModeChange = (mode: 'items' | 'shares') => {
     if (mode === splitMode) return;
     if (mode === 'shares' && hasItems) {
@@ -134,27 +145,29 @@ export function AddExpense() {
       setItems([]);
       setDiscount(undefined);
       setDiscountType('percentage');
-      setManualTotal(null);
       setReceiptDate(undefined);
     }
     if (mode === 'items' && Object.keys(memberShares).length > 0) {
       if (!window.confirm('Switching to Items mode will clear your shares. Continue?')) return;
       setMemberShares({});
-      setSharesTotalAmount(0);
-      setDiscount(undefined);
-      setDiscountType('percentage');
     }
     setSplitMode(mode);
   };
 
   const handleReceiptProcessed = (result: ReceiptOCRResult) => {
+    setSplitMode('items');
     setItems(result.extracted.items);
 
     if (result.extracted.discount && result.extracted.discount > 0) {
       setDiscount(result.extracted.discount);
-      setDiscountType('percentage'); // OCR always returns percentage
+      setDiscountType('percentage');
+      const ocrBillGoc = result.extracted.items.reduce((sum, i) => sum + i.amount, 0);
+      const ocrDiscountAmount = ocrBillGoc * (result.extracted.discount / 100);
+      setTotalAmount(Math.max(0, roundNumber(ocrBillGoc - ocrDiscountAmount, 2)));
     } else {
       setDiscount(undefined);
+      const ocrTotal = result.extracted.items.reduce((sum, i) => sum + i.amount, 0);
+      setTotalAmount(ocrTotal);
     }
 
     if (result.extracted.merchant) {
@@ -175,40 +188,9 @@ export function AddExpense() {
     setDiscountType('percentage');
     setReceiptDate(undefined);
     setDescription('');
-    setManualTotal(null);
+    setTotalAmount(0);
   };
 
-  const handleTotalChange = (value: string) => {
-    const parsed = parseFloat(value);
-    if (!isNaN(parsed) && parsed >= 0) {
-      // Calculate the difference between new total and current items sum
-      const currentSum = items.reduce((sum, i) => sum + i.amount, 0);
-      const diff = roundNumber(parsed - currentSum, 2);
-
-      if (Math.abs(diff) > 0.001 && items.length > 0) {
-        // Find payer's item or first item to adjust
-        const payerItem = items.find(i => i.memberId === paidBy);
-        const targetItem = payerItem || items[0];
-
-        // Update the target item's amount
-        const newAmount = roundNumber(targetItem.amount + diff, 2);
-        setItems(items.map(item =>
-          item.id === targetItem.id ? { ...item, amount: Math.max(0, newAmount) } : item
-        ));
-      }
-      setManualTotal(null); // Reset since we adjusted items
-    } else if (value === '' || value === '0') {
-      setManualTotal(null);
-    }
-  };
-
-  // Handle items change - also reset manualTotal so total auto-updates
-  const handleItemsChange = (newItems: ReceiptItem[]) => {
-    setItems(newItems);
-    setManualTotal(null); // Reset so total = sum of items
-  };
-
-  // Task 4: Handle member tap - shares mode or items mode
   const handleMemberTap = (memberId: string) => {
     if (splitMode === 'shares') {
       setMemberShares(prev => {
@@ -223,7 +205,6 @@ export function AddExpense() {
       return;
     }
 
-    // If an item is selected, assign this member to it
     if (selectedItemId) {
       handleItemsChange(items.map(item =>
         item.id === selectedItemId ? { ...item, memberId } : item
@@ -235,20 +216,16 @@ export function AddExpense() {
     const isIncluded = includedMemberIds.has(memberId);
 
     if (isIncluded) {
-      // Remove all assignments for this member
       handleItemsChange(items.map(item =>
         item.memberId === memberId ? { ...item, memberId: undefined } : item
       ));
     } else {
-      // Find first unassigned item
       const unassignedItem = items.find(item => !item.memberId);
       if (unassignedItem) {
-        // Assign to first unassigned item
         handleItemsChange(items.map(item =>
           item.id === unassignedItem.id ? { ...item, memberId } : item
         ));
       } else {
-        // Create new item for this member
         const newItem: ReceiptItem = {
           id: crypto.randomUUID(),
           description: '',
@@ -260,12 +237,10 @@ export function AddExpense() {
     }
   };
 
-  // Handle item selection for assignment
   const handleItemSelect = (itemId: string) => {
     setSelectedItemId(selectedItemId === itemId ? null : itemId);
   };
 
-  // Drag handlers for members
   const handleMemberDragStart = (e: React.DragEvent, memberId: string) => {
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('text/plain', memberId);
@@ -283,18 +258,46 @@ export function AddExpense() {
 
     if (splitMode === 'items') {
       if (totalAmount <= 0) { setError('Total amount must be greater than 0'); return; }
-      if (discountedItems.length === 0) { setError('Add at least one item'); return; }
+      if (items.length === 0) { setError('Add at least one item'); return; }
+      if (discountType === 'flat' && discount && discount >= totalAmount) {
+        setError('Flat discount must be less than total amount');
+        return;
+      }
     } else {
-      if (sharesTotalAmount <= 0) { setError('Total amount must be greater than 0'); return; }
+      if (totalAmount <= 0) { setError('Total amount must be greater than 0'); return; }
       if (Object.keys(memberShares).length === 0) { setError('Add at least one member'); return; }
-      if (sharesEffectiveTotal < 0) { setError('Discount cannot exceed total amount'); return; }
     }
 
     setSubmitting(true);
 
     try {
       if (splitMode === 'items') {
-        const memberTotals = calculateSplits();
+        const splitBillGoc = items.reduce((sum, i) => sum + i.amount, 0);
+        const splitDiscountAmount = discountType === 'flat'
+          ? (discount ?? 0)
+          : splitBillGoc * ((discount ?? 0) / 100);
+
+        const memberTotals = new Map<string, number>();
+        for (const item of items) {
+          if (item.memberId && item.amount > 0) {
+            const itemDiscount = splitBillGoc > 0
+              ? roundNumber(splitDiscountAmount * item.amount / splitBillGoc, 2)
+              : 0;
+            const effectiveAmount = roundNumber(item.amount - itemDiscount, 2);
+            const current = memberTotals.get(item.memberId) || 0;
+            memberTotals.set(item.memberId, roundNumber(current + effectiveAmount, 2));
+          }
+        }
+
+        if (paidBy && totalAmount > 0) {
+          const currentItemsSum = Array.from(memberTotals.values()).reduce((sum, v) => sum + v, 0);
+          const diff = roundNumber(totalAmount - currentItemsSum, 2);
+          if (Math.abs(diff) > 0.001) {
+            const payerCurrent = memberTotals.get(paidBy) || 0;
+            memberTotals.set(paidBy, roundNumber(payerCurrent + diff, 2));
+          }
+        }
+
         const splits = Array.from(memberTotals.entries()).map(([memberId, amount]) => ({
           memberId,
           value: amount,
@@ -302,6 +305,7 @@ export function AddExpense() {
           signedOff: memberId === paidBy || memberId === currentUser.id,
           signedAt: (memberId === paidBy || memberId === currentUser.id) ? new Date().toISOString() : undefined,
         }));
+
         await createExpense({
           description: description.trim(), amount: totalAmount, paidBy,
           createdBy: currentUser.id, splitType: 'exact', splits,
@@ -311,7 +315,7 @@ export function AddExpense() {
         });
       } else {
         const splits = Object.entries(memberShares).map(([memberId, share]) => {
-          const amount = roundNumber(sharesEffectiveTotal * share / totalShares, 2);
+          const amount = roundNumber(totalAmount * share / totalShares, 2);
           const isAutoSignOff = memberId === paidBy || memberId === currentUser.id;
           return {
             memberId, value: share, amount,
@@ -320,10 +324,8 @@ export function AddExpense() {
           };
         });
         await createExpense({
-          description: description.trim(), amount: sharesTotalAmount, paidBy,
+          description: description.trim(), amount: totalAmount, paidBy,
           createdBy: currentUser.id, splitType: 'shares', splits,
-          discount: discount || undefined,
-          discountType: discount ? discountType : undefined,
           tags: tags.length > 0 ? tags : undefined, receiptDate,
         });
       }
@@ -335,14 +337,11 @@ export function AddExpense() {
     }
   };
 
-  const hasItems = items.length > 0;
-
   return (
     <div className="pb-20">
       <h2 className="text-xl font-bold mb-6">Add Transaction</h2>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Receipt capture - items mode only */}
         {splitMode === 'items' && (
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
@@ -369,7 +368,6 @@ export function AddExpense() {
           />
         </div>
 
-        {/* Tags */}
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1">
             Tags (optional)
@@ -476,7 +474,6 @@ export function AddExpense() {
           </select>
         </div>
 
-        {/* Split between - draggable members */}
         <div>
           <div className="flex justify-between items-center mb-2">
             <label className="block text-sm font-medium text-gray-300">
@@ -491,32 +488,6 @@ export function AddExpense() {
                 Clear all
               </button>
             )}
-          </div>
-
-          {/* Task 4: Split mode toggle */}
-          <div className="flex bg-gray-800 rounded-lg p-0.5 mb-3">
-            <button
-              type="button"
-              onClick={() => handleSplitModeChange('items')}
-              className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
-                splitMode === 'items'
-                  ? 'bg-cyan-600 text-white font-semibold'
-                  : 'text-gray-500'
-              }`}
-            >
-              Items
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSplitModeChange('shares')}
-              className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
-                splitMode === 'shares'
-                  ? 'bg-cyan-600 text-white font-semibold'
-                  : 'text-gray-500'
-              }`}
-            >
-              Shares
-            </button>
           </div>
 
           <div className="flex flex-wrap gap-2">
@@ -547,28 +518,59 @@ export function AddExpense() {
           </p>
         </div>
 
-        {/* Task 3: Discount - show when items exist or shares mode active */}
-        {(hasItems || manualTotal !== null || (splitMode === 'shares' && sharesTotalAmount > 0)) && (
+        {/* Total */}
+        <div>
+          <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+            <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700">Total</span>
+            <input
+              type="number"
+              min="0"
+              value={totalAmount || ''}
+              onChange={(e) => {
+                if (splitMode === 'shares') {
+                  const parsed = parseFloat(e.target.value);
+                  if (!isNaN(parsed) && parsed >= 0) {
+                    setTotalAmount(parsed);
+                  } else if (e.target.value === '' || e.target.value === '0') {
+                    setTotalAmount(0);
+                  }
+                } else {
+                  handleTotalChange(e.target.value);
+                }
+              }}
+              placeholder="0"
+              className="flex-1 bg-transparent px-3 py-2 text-right text-lg font-semibold text-gray-100"
+            />
+            <span className="px-3 py-2 text-sm text-gray-500">đ</span>
+          </div>
+          <p className="text-xs text-gray-500 mt-1">Số tiền thực trả</p>
+        </div>
+
+        {/* Discount - items mode only, hidden when total = 0 */}
+        {splitMode === 'items' && totalAmount > 0 && (
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Discount
-            </label>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+              <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700">Discount</span>
               <input
                 type="number"
                 min="0"
-                step={discountType === 'percentage' ? '1' : '1000'}
-                value={discount || ''}
+                value={
+                  discount
+                    ? discountType === 'flat'
+                      ? discount / 1000
+                      : discount
+                    : ''
+                }
                 onChange={(e) => {
-                  const value = e.target.value ? parseFloat(e.target.value) : undefined;
-                  if (discountType === 'percentage') {
-                    setDiscount(value && value > 0 && value <= 100 ? value : undefined);
+                  const raw = e.target.value ? parseFloat(e.target.value) : undefined;
+                  if (discountType === 'flat') {
+                    setDiscount(raw && raw > 0 ? raw * 1000 : undefined);
                   } else {
-                    setDiscount(value && value > 0 ? value : undefined);
+                    setDiscount(raw && raw > 0 && raw <= 100 ? raw : undefined);
                   }
                 }}
                 placeholder="0"
-                className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100"
+                className="flex-1 bg-transparent px-3 py-2 text-right text-lg font-semibold text-gray-100"
               />
               <select
                 value={discountType}
@@ -576,32 +578,56 @@ export function AddExpense() {
                   setDiscountType(e.target.value as DiscountType);
                   setDiscount(undefined);
                 }}
-                className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-2 text-gray-100 text-sm"
+                className="bg-gray-800 border-l border-gray-700 px-2 py-2 text-gray-100 text-sm"
               >
                 <option value="percentage">%</option>
-                <option value="flat">đ</option>
+                <option value="flat">K</option>
               </select>
-              <span className="text-gray-400 text-sm">
-                {discount
-                  ? discountType === 'percentage'
-                    ? `${discount}% off all items`
-                    : `${discount.toLocaleString()}đ off`
-                  : 'No discount'}
-              </span>
-              {discount && (
+            </div>
+            {discount && (
+              <div className="flex justify-between items-center mt-1">
+                <span className="text-xs text-gray-500">
+                  Bill gốc: {billGoc.toLocaleString()}đ
+                </span>
                 <button
                   type="button"
                   onClick={() => setDiscount(undefined)}
-                  className="text-red-400 hover:text-red-300 text-sm"
+                  className="text-xs text-red-400 hover:text-red-300"
                 >
                   Remove
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Task 5: Amounts / Shares section */}
+        {/* Split mode toggle */}
+        <div className="flex bg-gray-800 rounded-lg p-0.5">
+          <button
+            type="button"
+            onClick={() => handleSplitModeChange('items')}
+            className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
+              splitMode === 'items'
+                ? 'bg-cyan-600 text-white font-semibold'
+                : 'text-gray-500'
+            }`}
+          >
+            Items
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSplitModeChange('shares')}
+            className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
+              splitMode === 'shares'
+                ? 'bg-cyan-600 text-white font-semibold'
+                : 'text-gray-500'
+            }`}
+          >
+            Shares
+          </button>
+        </div>
+
+        {/* Split details */}
         {splitMode === 'items' ? (
           <div>
             <div className="flex justify-between items-center mb-2">
@@ -615,9 +641,17 @@ export function AddExpense() {
                 }} className="text-sm text-cyan-400 hover:text-cyan-300">Split equally</button>
               )}
             </div>
-            <ReceiptItems items={discountedItems} members={group.members} currency={group.currency}
-              totalAmount={totalAmount} onTotalChange={handleTotalChange} onChange={handleItemsChange}
-              payerId={paidBy} selectedItemId={selectedItemId} onItemSelect={handleItemSelect} />
+            <ReceiptItems
+              items={items}
+              members={group.members}
+              currency={group.currency}
+              discountAmount={discountAmount}
+              billGoc={billGoc}
+              onChange={handleItemsChange}
+              payerId={paidBy}
+              selectedItemId={selectedItemId}
+              onItemSelect={handleItemSelect}
+            />
           </div>
         ) : (
           <div>
@@ -628,24 +662,13 @@ export function AddExpense() {
               </span>
             </div>
 
-            {/* Total amount input */}
-            <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden mb-3">
-              <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700">Total</span>
-              <input type="number" min="0" value={sharesTotalAmount || ''}
-                onChange={(e) => setSharesTotalAmount(parseFloat(e.target.value) || 0)}
-                placeholder="Enter total..."
-                className="flex-1 bg-transparent px-3 py-2 text-right text-lg font-semibold text-gray-100" />
-              <span className="px-3 py-2 text-sm text-gray-500">đ</span>
-            </div>
-
-            {/* Member shares stepper */}
             <div className="space-y-1">
               {Object.entries(memberShares).map(([memberId, share]) => {
                 const member = group.members.find(m => m.id === memberId);
                 if (!member) return null;
                 const isYou = currentUser && memberId === currentUser.id;
                 const percentage = totalShares > 0 ? roundNumber((share / totalShares) * 100) : 0;
-                const memberAmount = totalShares > 0 ? roundNumber(sharesEffectiveTotal * share / totalShares, 2) : 0;
+                const memberAmount = totalShares > 0 ? roundNumber(totalAmount * share / totalShares, 2) : 0;
 
                 return (
                   <div key={memberId} className="flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
@@ -672,22 +695,11 @@ export function AddExpense() {
               })}
             </div>
 
-            {/* Summary */}
-            {sharesTotalAmount > 0 && (
+            {totalAmount > 0 && (
               <div className="mt-3 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">Subtotal</span>
-                  <span className="text-gray-400">{sharesTotalAmount.toLocaleString()}đ</span>
-                </div>
-                {discount && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">Discount</span>
-                    <span className="text-red-400">−{sharesDiscountAmount.toLocaleString()}đ</span>
-                  </div>
-                )}
-                <div className="flex justify-between text-sm font-semibold mt-1 pt-1 border-t border-gray-800">
+                <div className="flex justify-between text-sm font-semibold">
                   <span className="text-gray-300">Total to split</span>
-                  <span className="text-white">{sharesEffectiveTotal.toLocaleString()}đ</span>
+                  <span className="text-white">{totalAmount.toLocaleString()}đ</span>
                 </div>
               </div>
             )}
@@ -702,7 +714,7 @@ export function AddExpense() {
 
         <button
           type="submit"
-          disabled={submitting || (splitMode === 'items' ? discountedItems.length === 0 : Object.keys(memberShares).length === 0 || sharesTotalAmount <= 0)}
+          disabled={submitting || (splitMode === 'items' ? items.length === 0 : Object.keys(memberShares).length === 0 || totalAmount <= 0)}
           className="w-full bg-cyan-600 text-white py-3 rounded-lg font-medium hover:bg-cyan-700 disabled:opacity-50"
         >
           {submitting ? 'Adding...' : 'Add Transaction'}
