@@ -32,6 +32,9 @@ export interface Group {
 // Split types
 export type SplitType = 'equal' | 'exact' | 'percentage' | 'shares' | 'settlement';
 
+// Discount types
+export type DiscountType = 'percentage' | 'flat';
+
 // Individual split within an expense
 export interface ExpenseSplit {
   memberId: string;
@@ -52,7 +55,8 @@ export interface Expense {
   splitType: SplitType;
   splits: ExpenseSplit[];
   items?: ReceiptItem[]; // stored items for editing later
-  discount?: number; // discount percentage (e.g., 10 for 10% off)
+  discount?: number; // percentage value OR flat amount, depending on discountType
+  discountType?: DiscountType; // default 'percentage' for backward compat
   tags?: string[]; // user-defined tags
   createdAt: string;
   receiptUrl?: string;   // URL to receipt image in R2
