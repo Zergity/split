@@ -18,6 +18,7 @@ export function EditExpense() {
   const [discount, setDiscount] = useState<number | undefined>(undefined);
   const [discountType, setDiscountType] = useState<DiscountType>('percentage');
   const [totalAmount, setTotalAmount] = useState<number>(0);
+  const [showDiscountInput, setShowDiscountInput] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +34,7 @@ export function EditExpense() {
       setDiscount(expense.discount);
       setDiscountType(expense.discountType || 'percentage');
       setTotalAmount(expense.amount);
+      if (expense.discount) setShowDiscountInput(true);
 
       if (expense.splitType === 'shares') {
         setSplitMode('shares');
@@ -486,10 +488,10 @@ export function EditExpense() {
           </div>
         )}
 
-        {/* 5. Total combo input */}
+        {/* 5. Total + Discount (same row) */}
         <div>
           <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
-            <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700">Total</span>
+            <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Total</span>
             <input
               type="number"
               min="0"
@@ -508,67 +510,63 @@ export function EditExpense() {
                 }
               }}
               placeholder="0"
-              className="flex-1 bg-transparent px-3 py-2 text-right text-lg font-semibold text-gray-100 disabled:opacity-50"
+              className="flex-1 min-w-0 bg-transparent px-3 py-2 text-right text-lg font-semibold text-gray-100 disabled:opacity-50"
             />
-            <span className="px-3 py-2 text-sm text-gray-500">đ</span>
+            <span className="px-2 py-2 text-sm text-gray-500">K</span>
           </div>
-          <p className="text-xs text-gray-500 mt-1">Số tiền thực trả</p>
-        </div>
-
-        {/* 6. Discount combo input - items mode only, hidden when total = 0 */}
-        {splitMode === 'items' && totalAmount > 0 && !canOnlyAssign && !canOnlyEditOwnItems && (
-          <div>
-            <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
-              <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700">Discount</span>
+          <div className="flex justify-between items-center mt-1">
+            <p className="text-xs text-gray-500">
+              {discount
+                ? `Amount paid · Original: ${billGoc.toLocaleString()}${group.currency}`
+                : 'Amount paid'}
+            </p>
+            {splitMode === 'items' && totalAmount > 0 && !canOnlyAssign && !canOnlyEditOwnItems && !showDiscountInput && !discount && (
+              <button
+                type="button"
+                onClick={() => setShowDiscountInput(true)}
+                className="text-xs text-cyan-500 hover:text-cyan-400"
+              >
+                + Add discount
+              </button>
+            )}
+          </div>
+          {splitMode === 'items' && totalAmount > 0 && !canOnlyAssign && !canOnlyEditOwnItems && (showDiscountInput || discount) && (
+            <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden mt-2">
+              <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Discount</span>
               <input
                 type="number"
                 min="0"
-                value={
-                  discount
-                    ? discountType === 'flat'
-                      ? discount / 1000
-                      : discount
-                    : ''
-                }
+                autoFocus
+                value={discount || ''}
                 onChange={(e) => {
                   const raw = e.target.value ? parseFloat(e.target.value) : undefined;
                   if (discountType === 'flat') {
-                    setDiscount(raw && raw > 0 ? raw * 1000 : undefined);
+                    setDiscount(raw && raw > 0 ? raw : undefined);
                   } else {
                     setDiscount(raw && raw > 0 && raw <= 100 ? raw : undefined);
                   }
                 }}
                 placeholder="0"
-                className="flex-1 bg-transparent px-3 py-2 text-right text-lg font-semibold text-gray-100"
+                className="flex-1 bg-transparent px-3 py-2 text-right text-sm text-gray-100"
               />
               <select
                 value={discountType}
-                onChange={(e) => {
-                  setDiscountType(e.target.value as DiscountType);
-                  setDiscount(undefined);
-                }}
+                onChange={(e) => setDiscountType(e.target.value as DiscountType)}
                 className="bg-gray-800 border-l border-gray-700 px-2 py-2 text-gray-100 text-sm"
               >
                 <option value="percentage">%</option>
                 <option value="flat">K</option>
               </select>
+              <button
+                type="button"
+                onClick={() => { setDiscount(undefined); setShowDiscountInput(false); }}
+                className="px-2 py-2 text-gray-600 hover:text-red-400 text-sm"
+              >
+                ×
+              </button>
             </div>
-            {discount && (
-              <div className="flex justify-between items-center mt-1">
-                <span className="text-xs text-gray-500">
-                  Bill gốc: {billGoc.toLocaleString()}đ
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setDiscount(undefined)}
-                  className="text-xs text-red-400 hover:text-red-300"
-                >
-                  Remove
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+          )}
+        </div>
 
         {/* 7. Split mode toggle - payer only */}
         {isPayer && (
@@ -676,7 +674,7 @@ export function EditExpense() {
                       <span className="text-xs text-gray-500 ml-2">{share}/{totalShares} · {percentage}%</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-sm text-green-400 font-medium">{memberAmount.toLocaleString()}đ</span>
+                      <span className="text-sm text-green-400 font-medium">{memberAmount.toLocaleString()}{group.currency}</span>
                       {isPayer && (
                         <div className="flex items-center gap-1">
                           <button
@@ -706,7 +704,7 @@ export function EditExpense() {
               <div className="mt-3 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
                 <div className="flex justify-between text-sm font-semibold">
                   <span className="text-gray-300">Total to split</span>
-                  <span className="text-white">{totalAmount.toLocaleString()}đ</span>
+                  <span className="text-white">{totalAmount.toLocaleString()}{group.currency}</span>
                 </div>
               </div>
             )}

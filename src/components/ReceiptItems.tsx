@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ReceiptItem, Member } from '../types';
 import { useApp } from '../context/AppContext';
-import { roundNumber } from '../utils/balances';
+import { roundNumber, formatCurrency } from '../utils/balances';
 
 interface ReceiptItemsProps {
   items: ReceiptItem[];
@@ -230,7 +230,7 @@ export function ReceiptItems({ items, members, currency, discountAmount, billGoc
           </div>
           {showDiscount && (
             <p className="text-xs text-orange-400 pl-[5.5rem]">
-              Giảm {itemDiscountAmount}đ → Trả {itemFinalAmount}đ
+              -{formatCurrency(itemDiscountAmount, currency)} → Pay {formatCurrency(itemFinalAmount, currency)}
             </p>
           )}
           </div>

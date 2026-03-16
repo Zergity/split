@@ -19,6 +19,8 @@ export function AddExpense() {
   const [discount, setDiscount] = useState<number | undefined>(undefined);
   const [discountType, setDiscountType] = useState<DiscountType>('percentage');
   const [totalAmount, setTotalAmount] = useState<number>(0);
+  const [hasManualTotal, setHasManualTotal] = useState(false);
+  const [showDiscountInput, setShowDiscountInput] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
@@ -69,14 +71,16 @@ export function AddExpense() {
 
   const billGoc = useMemo(() => {
     if (splitMode !== 'items') return totalAmount;
+    if (hasManualTotal) return calculateBillGoc(totalAmount, discount, discountType);
     if (items.length > 0) {
       return roundNumber(items.reduce((sum, item) => sum + item.amount, 0), 2);
     }
     return calculateBillGoc(totalAmount, discount, discountType);
-  }, [items, totalAmount, discount, discountType, splitMode]);
+  }, [items, totalAmount, discount, discountType, splitMode, hasManualTotal]);
 
   const discountAmount = useMemo(() => {
     if (splitMode !== 'items') return 0;
+    if (hasManualTotal) return calculateDiscountAmount(discount, discountType, totalAmount);
     if (items.length > 0) {
       const bg = items.reduce((sum, item) => sum + item.amount, 0);
       if (!discount || discount <= 0) return 0;
@@ -84,26 +88,28 @@ export function AddExpense() {
       return roundNumber(bg * (discount / 100), 2);
     }
     return calculateDiscountAmount(discount, discountType, totalAmount);
-  }, [items, totalAmount, discount, discountType, splitMode]);
+  }, [items, totalAmount, discount, discountType, splitMode, hasManualTotal]);
 
   const includedMemberIds = splitMode === 'items'
     ? new Set(items.filter(i => i.memberId).map(i => i.memberId!))
     : new Set(Object.keys(memberShares));
 
   const handleItemsChange = (newItems: ReceiptItem[]) => {
-    const newBillGoc = newItems.reduce((sum, i) => sum + i.amount, 0);
-    const newDiscountAmount = discountType === 'flat'
-      ? (discount ?? 0)
-      : newBillGoc * ((discount ?? 0) / 100);
-    const newTotal = roundNumber(newBillGoc - newDiscountAmount, 2);
     setItems(newItems);
-    setTotalAmount(Math.max(0, newTotal));
     if (newItems.length === 0) {
       setDiscount(undefined);
+      setHasManualTotal(false);
+    } else if (!hasManualTotal) {
+      const newBillGoc = newItems.reduce((sum, i) => sum + i.amount, 0);
+      const newDiscountAmount = discountType === 'flat'
+        ? (discount ?? 0)
+        : newBillGoc * ((discount ?? 0) / 100);
+      setTotalAmount(Math.max(0, roundNumber(newBillGoc - newDiscountAmount, 2)));
     }
   };
 
   const handleTotalChange = (value: string) => {
+    setHasManualTotal(true);
     const parsed = parseFloat(value);
     if (!isNaN(parsed) && parsed >= 0) {
       const newBillGoc = calculateBillGoc(parsed, discount, discountType);
@@ -122,14 +128,6 @@ export function AddExpense() {
           setItems(items.map(item =>
             item.id === firstPayerItem.id ? { ...item, amount: newItemAmount } : item
           ));
-        } else if (items.length === 0 || paidBy) {
-          const newItem: ReceiptItem = {
-            id: crypto.randomUUID(),
-            description: '',
-            amount: newBillGoc,
-            memberId: paidBy || undefined,
-          };
-          setItems(newItem.amount > 0 ? [newItem] : []);
         }
       }
       setTotalAmount(parsed);
@@ -145,6 +143,8 @@ export function AddExpense() {
       setItems([]);
       setDiscount(undefined);
       setDiscountType('percentage');
+      setHasManualTotal(false);
+      setShowDiscountInput(false);
       setReceiptDate(undefined);
     }
     if (mode === 'items' && Object.keys(memberShares).length > 0) {
@@ -157,6 +157,7 @@ export function AddExpense() {
   const handleReceiptProcessed = (result: ReceiptOCRResult) => {
     setSplitMode('items');
     setItems(result.extracted.items);
+    setHasManualTotal(true);
 
     if (result.extracted.discount && result.extracted.discount > 0) {
       setDiscount(result.extracted.discount);
@@ -186,6 +187,7 @@ export function AddExpense() {
     setItems([]);
     setDiscount(undefined);
     setDiscountType('percentage');
+    setHasManualTotal(false);
     setReceiptDate(undefined);
     setDescription('');
     setTotalAmount(0);
@@ -518,16 +520,17 @@ export function AddExpense() {
           </p>
         </div>
 
-        {/* Total */}
+        {/* Total + Discount (same row) */}
         <div>
           <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
-            <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700">Total</span>
+            <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Total</span>
             <input
               type="number"
               min="0"
               value={totalAmount || ''}
               onChange={(e) => {
                 if (splitMode === 'shares') {
+                  setHasManualTotal(true);
                   const parsed = parseFloat(e.target.value);
                   if (!isNaN(parsed) && parsed >= 0) {
                     setTotalAmount(parsed);
@@ -539,67 +542,63 @@ export function AddExpense() {
                 }
               }}
               placeholder="0"
-              className="flex-1 bg-transparent px-3 py-2 text-right text-lg font-semibold text-gray-100"
+              className="flex-1 min-w-0 bg-transparent px-3 py-2 text-right text-lg font-semibold text-gray-100"
             />
-            <span className="px-3 py-2 text-sm text-gray-500">đ</span>
+            <span className="px-2 py-2 text-sm text-gray-500">K</span>
           </div>
-          <p className="text-xs text-gray-500 mt-1">Số tiền thực trả</p>
-        </div>
-
-        {/* Discount - items mode only, hidden when total = 0 */}
-        {splitMode === 'items' && totalAmount > 0 && (
-          <div>
-            <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
-              <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700">Discount</span>
+          <div className="flex justify-between items-center mt-1">
+            <p className="text-xs text-gray-500">
+              {discount
+                ? `Amount paid · Original: ${billGoc.toLocaleString()}${group.currency}`
+                : 'Amount paid'}
+            </p>
+            {splitMode === 'items' && totalAmount > 0 && !showDiscountInput && !discount && (
+              <button
+                type="button"
+                onClick={() => setShowDiscountInput(true)}
+                className="text-xs text-cyan-500 hover:text-cyan-400"
+              >
+                + Add discount
+              </button>
+            )}
+          </div>
+          {splitMode === 'items' && totalAmount > 0 && (showDiscountInput || discount) && (
+            <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden mt-2">
+              <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Discount</span>
               <input
                 type="number"
                 min="0"
-                value={
-                  discount
-                    ? discountType === 'flat'
-                      ? discount / 1000
-                      : discount
-                    : ''
-                }
+                autoFocus
+                value={discount || ''}
                 onChange={(e) => {
                   const raw = e.target.value ? parseFloat(e.target.value) : undefined;
                   if (discountType === 'flat') {
-                    setDiscount(raw && raw > 0 ? raw * 1000 : undefined);
+                    setDiscount(raw && raw > 0 ? raw : undefined);
                   } else {
                     setDiscount(raw && raw > 0 && raw <= 100 ? raw : undefined);
                   }
                 }}
                 placeholder="0"
-                className="flex-1 bg-transparent px-3 py-2 text-right text-lg font-semibold text-gray-100"
+                className="flex-1 bg-transparent px-3 py-2 text-right text-sm text-gray-100"
               />
               <select
                 value={discountType}
-                onChange={(e) => {
-                  setDiscountType(e.target.value as DiscountType);
-                  setDiscount(undefined);
-                }}
+                onChange={(e) => setDiscountType(e.target.value as DiscountType)}
                 className="bg-gray-800 border-l border-gray-700 px-2 py-2 text-gray-100 text-sm"
               >
                 <option value="percentage">%</option>
                 <option value="flat">K</option>
               </select>
+              <button
+                type="button"
+                onClick={() => { setDiscount(undefined); setShowDiscountInput(false); }}
+                className="px-2 py-2 text-gray-600 hover:text-red-400 text-sm"
+              >
+                ×
+              </button>
             </div>
-            {discount && (
-              <div className="flex justify-between items-center mt-1">
-                <span className="text-xs text-gray-500">
-                  Bill gốc: {billGoc.toLocaleString()}đ
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setDiscount(undefined)}
-                  className="text-xs text-red-400 hover:text-red-300"
-                >
-                  Remove
-                </button>
-              </div>
-            )}
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Split mode toggle */}
         <div className="flex bg-gray-800 rounded-lg p-0.5">
@@ -652,6 +651,16 @@ export function AddExpense() {
               selectedItemId={selectedItemId}
               onItemSelect={handleItemSelect}
             />
+            {hasManualTotal && items.length > 0 && (() => {
+              const itemsSum = roundNumber(items.reduce((sum, i) => sum + i.amount, 0), 2);
+              const diff = roundNumber(itemsSum - billGoc, 2);
+              if (Math.abs(diff) < 0.01) return null;
+              return (
+                <p className="text-xs text-yellow-400 mt-1">
+                  Items: {itemsSum.toLocaleString()}{group.currency} · Expected: {billGoc.toLocaleString()}{group.currency} (diff {diff > 0 ? '+' : ''}{diff}{group.currency})
+                </p>
+              );
+            })()}
           </div>
         ) : (
           <div>
@@ -679,7 +688,7 @@ export function AddExpense() {
                       <span className="text-xs text-gray-500 ml-2">{share}/{totalShares} · {percentage}%</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-sm text-green-400 font-medium">{memberAmount.toLocaleString()}đ</span>
+                      <span className="text-sm text-green-400 font-medium">{memberAmount.toLocaleString()}{group.currency}</span>
                       <div className="flex items-center gap-1">
                         <button type="button" disabled={share <= 1}
                           onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: Math.max(1, prev[memberId] - 1) }))}
@@ -699,7 +708,7 @@ export function AddExpense() {
               <div className="mt-3 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
                 <div className="flex justify-between text-sm font-semibold">
                   <span className="text-gray-300">Total to split</span>
-                  <span className="text-white">{totalAmount.toLocaleString()}đ</span>
+                  <span className="text-white">{totalAmount.toLocaleString()}{group.currency}</span>
                 </div>
               </div>
             )}
