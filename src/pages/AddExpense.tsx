@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { ReceiptCapture } from '../components/ReceiptCapture';
@@ -8,7 +8,7 @@ import { roundNumber, getTagColor } from '../utils/balances';
 
 export function AddExpense() {
   const navigate = useNavigate();
-  const { group, currentUser, createExpense } = useApp();
+  const { group, currentUser, createExpense, expenses } = useApp();
 
   const [description, setDescription] = useState('');
   const [paidBy, setPaidBy] = useState(currentUser?.id || '');
@@ -21,6 +21,42 @@ export function AddExpense() {
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+
+    if (showSuggestions) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showSuggestions]);
+
+  const tagSuggestions = useMemo(() => {
+    const freq = new Map<string, number>();
+    expenses.forEach(e =>
+      e.tags?.filter(t => t !== 'deleted').forEach(t =>
+        freq.set(t, (freq.get(t) || 0) + 1)
+      )
+    );
+    return [...freq.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([tag]) => tag);
+  }, [expenses]);
+
+  const filteredSuggestions = useMemo(() => {
+    if (!tagInput.trim()) return [];
+    const input = tagInput.toLowerCase().trim();
+    return tagSuggestions.filter(tag => tag.startsWith(input) && !tags.includes(tag));
+  }, [tagInput, tagSuggestions, tags]);
+
+  const showCreateOption = tagInput.trim() && filteredSuggestions.length === 0;
 
   // Calculate totals from items, or use manual total if set
   const itemsTotal = items.reduce((sum, i) => sum + i.amount, 0);
@@ -313,18 +349,25 @@ export function AddExpense() {
                 </button>
               );
             })}
-            <div className="flex items-center gap-1">
+            <div ref={dropdownRef} className="relative flex items-center gap-1">
               <input
                 type="text"
                 value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setTagInput(value);
+                  setShowSuggestions(value.trim().length >= 1);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
                     if (tagInput.trim() && !tags.includes(tagInput.trim().toLowerCase())) {
                       setTags([...tags, tagInput.trim().toLowerCase()]);
                       setTagInput('');
+                      setShowSuggestions(false);
                     }
+                  } else if (e.key === 'Escape') {
+                    setShowSuggestions(false);
                   }
                 }}
                 placeholder="add tag"
@@ -336,12 +379,42 @@ export function AddExpense() {
                   if (tagInput.trim() && !tags.includes(tagInput.trim().toLowerCase())) {
                     setTags([...tags, tagInput.trim().toLowerCase()]);
                     setTagInput('');
+                    setShowSuggestions(false);
                   }
                 }}
                 className="text-sm text-cyan-400 hover:text-cyan-300"
               >
                 +
               </button>
+
+              {showSuggestions && (filteredSuggestions.length > 0 || showCreateOption) && (
+                <div className="absolute top-full left-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 min-w-[200px] max-h-[200px] overflow-y-auto">
+                  {filteredSuggestions.map((tag) => {
+                    const color = getTagColor(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => {
+                          setTags([...tags, tag]);
+                          setTagInput('');
+                          setShowSuggestions(false);
+                        }}
+                        className="w-full px-3 py-2 text-sm text-left hover:bg-gray-700 flex items-center gap-2"
+                      >
+                        <span className={`px-2 py-0.5 rounded-full text-xs ${color.bg} ${color.text}`}>
+                          {tag}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {showCreateOption && (
+                    <div className="px-3 py-2 text-sm text-gray-500 italic">
+                      Press Enter to add "{tagInput.trim()}"
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
