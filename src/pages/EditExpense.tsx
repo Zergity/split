@@ -2,8 +2,14 @@ import { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { ReceiptItems } from '../components/ReceiptItems';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ReceiptItem, DiscountType } from '../types';
 import { roundNumber, calculateDiscountAmount, calculateBillGoc } from '../utils/balances';
+
+function toLocalDatetimeInput(iso: string): string {
+  const d = new Date(iso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
 
 export function EditExpense() {
   const navigate = useNavigate();
@@ -20,6 +26,8 @@ export function EditExpense() {
   const [totalAmount, setTotalAmount] = useState<number>(0);
   const [showDiscountInput, setShowDiscountInput] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [receiptDate, setReceiptDate] = useState<string>('');
+  const [pendingModeSwitch, setPendingModeSwitch] = useState<'items' | 'shares' | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,6 +42,7 @@ export function EditExpense() {
       setDiscount(expense.discount);
       setDiscountType(expense.discountType || 'percentage');
       setTotalAmount(expense.amount);
+      setReceiptDate(expense.receiptDate ?? expense.createdAt);
       if (expense.discount) setShowDiscountInput(true);
 
       if (expense.splitType === 'shares') {
@@ -338,6 +347,7 @@ export function EditExpense() {
           items,
           discount,
           discountType: discount ? discountType : undefined,
+          receiptDate: receiptDate || undefined,
         });
       } else {
         const oldSplitsMap = new Map(expense.splits.map((s) => [s.memberId, s]));
@@ -383,6 +393,7 @@ export function EditExpense() {
           paidBy,
           splitType: 'shares',
           splits,
+          receiptDate: receiptDate || undefined,
         });
       }
 
@@ -430,7 +441,19 @@ export function EditExpense() {
           />
         </div>
 
-        {/* 2. Tags - EditExpense does not have tags state, skip */}
+        {/* 2. Payment date */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">
+            Payment date
+          </label>
+          <input
+            type="datetime-local"
+            value={receiptDate ? toLocalDatetimeInput(receiptDate) : ''}
+            onChange={(e) => setReceiptDate(e.target.value ? new Date(e.target.value).toISOString() : expense?.createdAt ?? '')}
+            disabled={canOnlyAssign || canOnlyEditOwnItems}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 disabled:opacity-50"
+          />
+        </div>
 
         {/* 3. Paid by */}
         <div>
@@ -575,7 +598,7 @@ export function EditExpense() {
               type="button"
               onClick={() => {
                 if (splitMode === 'shares') {
-                  if (!window.confirm('Switching to Items mode will clear your shares. Continue?')) return;
+                  if (Object.keys(memberShares).length > 0) { setPendingModeSwitch('items'); return; }
                   setMemberShares({});
                   setDiscount(undefined);
                   setDiscountType('percentage');
@@ -594,9 +617,7 @@ export function EditExpense() {
               type="button"
               onClick={() => {
                 if (splitMode === 'items') {
-                  if (items.length > 0) {
-                    if (!window.confirm('Switching to Shares mode will clear your items. Continue?')) return;
-                  }
+                  if (items.length > 0) { setPendingModeSwitch('shares'); return; }
                   setItems([]);
                   setDiscount(undefined);
                   setDiscountType('percentage');
@@ -740,6 +761,36 @@ export function EditExpense() {
           </button>
         </div>
       </form>
+
+      <ConfirmDialog
+        open={pendingModeSwitch !== null}
+        title={pendingModeSwitch === 'shares' ? 'Switch to Shares' : 'Switch to Items'}
+        message={pendingModeSwitch === 'shares' ? 'Your items will be cleared. This cannot be undone.' : 'Your shares will be cleared. This cannot be undone.'}
+        confirmLabel="Clear & Switch"
+        destructive
+        onConfirm={() => {
+          if (pendingModeSwitch === 'items') {
+            const placeholders: ReceiptItem[] = Object.keys(memberShares).map(memberId => ({
+              id: crypto.randomUUID(),
+              description: '',
+              amount: 0,
+              memberId,
+            }));
+            setMemberShares({});
+            setDiscount(undefined);
+            setDiscountType('percentage');
+            setItems(placeholders);
+            setSplitMode('items');
+          } else if (pendingModeSwitch === 'shares') {
+            setItems([]);
+            setDiscount(undefined);
+            setDiscountType('percentage');
+            setSplitMode('shares');
+          }
+          setPendingModeSwitch(null);
+        }}
+        onCancel={() => setPendingModeSwitch(null)}
+      />
     </div>
   );
 }

@@ -3,8 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { ReceiptCapture } from '../components/ReceiptCapture';
 import { ReceiptItems } from '../components/ReceiptItems';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ReceiptItem, ReceiptOCRResult, DiscountType } from '../types';
 import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc } from '../utils/balances';
+
+function toLocalDatetimeInput(iso: string): string {
+  const d = new Date(iso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
 
 export function AddExpense() {
   const navigate = useNavigate();
@@ -14,7 +20,7 @@ export function AddExpense() {
   const [paidBy, setPaidBy] = useState(currentUser?.id || '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [receiptDate, setReceiptDate] = useState<string | undefined>(undefined);
+  const [receiptDate, setReceiptDate] = useState<string>(() => new Date().toISOString());
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [discount, setDiscount] = useState<number | undefined>(undefined);
   const [discountType, setDiscountType] = useState<DiscountType>('percentage');
@@ -27,7 +33,9 @@ export function AddExpense() {
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   const [splitMode, setSplitMode] = useState<'items' | 'shares'>('items');
+  const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
   const [memberShares, setMemberShares] = useState<Record<string, number>>({});
+  const [pendingModeSwitch, setPendingModeSwitch] = useState<'items' | 'shares' | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -90,9 +98,7 @@ export function AddExpense() {
     return calculateDiscountAmount(discount, discountType, totalAmount);
   }, [items, totalAmount, discount, discountType, splitMode, hasManualTotal]);
 
-  const includedMemberIds = splitMode === 'items'
-    ? new Set(items.filter(i => i.memberId).map(i => i.memberId!))
-    : new Set(Object.keys(memberShares));
+  const includedMemberIds = selectedMemberIds;
 
   const handleItemsChange = (newItems: ReceiptItem[]) => {
     setItems(newItems);
@@ -136,27 +142,45 @@ export function AddExpense() {
     }
   };
 
-  const handleSplitModeChange = (mode: 'items' | 'shares') => {
-    if (mode === splitMode) return;
-    if (mode === 'shares' && hasItems) {
-      if (!window.confirm('Switching to Shares mode will clear your items. Continue?')) return;
+  const executeModeSwitch = (mode: 'items' | 'shares') => {
+    if (mode === 'shares') {
       setItems([]);
       setDiscount(undefined);
       setDiscountType('percentage');
       setHasManualTotal(false);
       setShowDiscountInput(false);
-      setReceiptDate(undefined);
-    }
-    if (mode === 'items' && Object.keys(memberShares).length > 0) {
-      if (!window.confirm('Switching to Items mode will clear your shares. Continue?')) return;
+      const shares: Record<string, number> = {};
+      selectedMemberIds.forEach(id => { shares[id] = memberShares[id] ?? 1; });
+      setMemberShares(shares);
+    } else {
       setMemberShares({});
+      const placeholders: ReceiptItem[] = Array.from(selectedMemberIds).map(memberId => ({
+        id: crypto.randomUUID(),
+        description: '',
+        amount: 0,
+        memberId,
+      }));
+      setItems(placeholders);
     }
     setSplitMode(mode);
+    setPendingModeSwitch(null);
+  };
+
+  const handleSplitModeChange = (mode: 'items' | 'shares') => {
+    if (mode === splitMode) return;
+    const needsConfirm = mode === 'shares' ? hasItems : Object.keys(memberShares).length > 0;
+    if (needsConfirm) {
+      setPendingModeSwitch(mode);
+    } else {
+      executeModeSwitch(mode);
+    }
   };
 
   const handleReceiptProcessed = (result: ReceiptOCRResult) => {
     setSplitMode('items');
     setItems(result.extracted.items);
+    const ocrMemberIds = new Set(result.extracted.items.filter(i => i.memberId).map(i => i.memberId!));
+    if (ocrMemberIds.size > 0) setSelectedMemberIds(ocrMemberIds);
     setHasManualTotal(true);
 
     if (result.extracted.discount && result.extracted.discount > 0) {
@@ -188,25 +212,31 @@ export function AddExpense() {
     setDiscount(undefined);
     setDiscountType('percentage');
     setHasManualTotal(false);
-    setReceiptDate(undefined);
+    setReceiptDate(new Date().toISOString());
     setDescription('');
     setTotalAmount(0);
   };
 
   const handleMemberTap = (memberId: string) => {
+    const isIncluded = selectedMemberIds.has(memberId);
+
+    // Toggle selectedMemberIds
+    setSelectedMemberIds(prev => {
+      const next = new Set(prev);
+      if (isIncluded) next.delete(memberId); else next.add(memberId);
+      return next;
+    });
+
     if (splitMode === 'shares') {
       setMemberShares(prev => {
-        const newShares = { ...prev };
-        if (memberId in newShares) {
-          delete newShares[memberId];
-        } else {
-          newShares[memberId] = 1;
-        }
-        return newShares;
+        const next = { ...prev };
+        if (isIncluded) delete next[memberId]; else next[memberId] = 1;
+        return next;
       });
       return;
     }
 
+    // Items mode: assign to item if a slot is selected or available
     if (selectedItemId) {
       handleItemsChange(items.map(item =>
         item.id === selectedItemId ? { ...item, memberId } : item
@@ -215,27 +245,10 @@ export function AddExpense() {
       return;
     }
 
-    const isIncluded = includedMemberIds.has(memberId);
-
     if (isIncluded) {
       handleItemsChange(items.map(item =>
         item.memberId === memberId ? { ...item, memberId: undefined } : item
       ));
-    } else {
-      const unassignedItem = items.find(item => !item.memberId);
-      if (unassignedItem) {
-        handleItemsChange(items.map(item =>
-          item.id === unassignedItem.id ? { ...item, memberId } : item
-        ));
-      } else {
-        const newItem: ReceiptItem = {
-          id: crypto.randomUUID(),
-          description: '',
-          amount: 0,
-          memberId,
-        };
-        handleItemsChange([...items, newItem]);
-      }
     }
   };
 
@@ -267,7 +280,7 @@ export function AddExpense() {
       }
     } else {
       if (totalAmount <= 0) { setError('Total amount must be greater than 0'); return; }
-      if (Object.keys(memberShares).length === 0) { setError('Add at least one member'); return; }
+      if (selectedMemberIds.size === 0) { setError('Add at least one member'); return; }
     }
 
     setSubmitting(true);
@@ -366,6 +379,18 @@ export function AddExpense() {
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="What was this transaction for?"
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100"
+          />
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">
+            Payment date
+          </label>
+          <input
+            type="datetime-local"
+            value={receiptDate ? toLocalDatetimeInput(receiptDate) : ''}
+            onChange={(e) => setReceiptDate(e.target.value ? new Date(e.target.value).toISOString() : new Date().toISOString())}
             className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100"
           />
         </div>
@@ -729,6 +754,16 @@ export function AddExpense() {
           {submitting ? 'Adding...' : 'Add Transaction'}
         </button>
       </form>
+
+      <ConfirmDialog
+        open={pendingModeSwitch !== null}
+        title={pendingModeSwitch === 'shares' ? 'Switch to Shares' : 'Switch to Items'}
+        message={pendingModeSwitch === 'shares' ? 'Your items will be cleared. This cannot be undone.' : 'Your shares will be cleared. This cannot be undone.'}
+        confirmLabel="Clear & Switch"
+        destructive
+        onConfirm={() => pendingModeSwitch && executeModeSwitch(pendingModeSwitch)}
+        onCancel={() => setPendingModeSwitch(null)}
+      />
     </div>
   );
 }

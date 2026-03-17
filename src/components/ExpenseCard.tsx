@@ -576,7 +576,7 @@ export function ExpenseCard({
 
       <div className="flex justify-between items-center mt-3">
         <p className="text-xs text-gray-500">
-          {formatRelativeTime(expense.createdAt)}
+          {formatRelativeTime(expense.receiptDate ?? expense.createdAt)}
         </p>
         {showSignOff && userSplit && !userSplit.signedOff && (
           <SignOffButton expense={expense} compact />
