@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Expense, Member } from '../types';
-import { formatCurrency, formatRelativeTime, getTagColor, isDeleted } from '../utils/balances';
+import { calculateBillGoc, calculateDiscountAmount, formatCurrency, formatRelativeTime, getTagColor, isDeleted } from '../utils/balances';
 import { SignOffButton } from './SignOffButton';
 import { useApp } from '../context/AppContext';
+import { ConfirmDialog } from './ConfirmDialog';
+import { YouBadge } from './YouBadge';
 
 interface ExpenseCardProps {
   expense: Expense;
@@ -30,18 +32,23 @@ export function ExpenseCard({
   const [savingTags, setSavingTags] = useState(false);
   const [claimingItemId, setClaimingItemId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const handleDelete = async () => {
     if (onDelete) {
       onDelete();
     } else {
-      if (!confirm('Are you sure you want to delete this transaction?')) return;
-      setDeleting(true);
-      try {
-        await deleteExpense(expense);
-      } finally {
-        setDeleting(false);
-      }
+      setShowDeleteConfirm(true);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    setShowDeleteConfirm(false);
+    setDeleting(true);
+    try {
+      await deleteExpense(expense);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -66,7 +73,14 @@ export function ExpenseCard({
   const getMemberName = (id: string) => {
     const member = members.find((m) => m.id === id);
     const name = member?.name || 'Unknown';
-    if (currentUser && id === currentUser.id) return <>[{name}]</>;
+    if (currentUser && id === currentUser.id) {
+      return (
+        <>
+          {name}
+          <YouBadge />
+        </>
+      );
+    }
     return name;
   };
 
@@ -105,13 +119,9 @@ export function ExpenseCard({
                 )}
               </div>
               <p className="text-sm mt-2">
-                <span className={currentUser && payer?.id === currentUser.id ? 'text-yellow-400 font-medium' : 'text-gray-100'}>
-                  {currentUser && payer?.id === currentUser.id ? `[${payer?.name || 'Unknown'}]` : (payer?.name || 'Unknown')}
-                </span>
+                <span className="text-gray-100">{getMemberName(payer?.id ?? '')}</span>
                 <span className="text-gray-500 mx-2">paid</span>
-                <span className={currentUser && recipient?.id === currentUser.id ? 'text-yellow-400 font-medium' : 'text-gray-100'}>
-                  {currentUser && recipient?.id === currentUser.id ? `[${recipient?.name || 'Unknown'}]` : (recipient?.name || 'Unknown')}
-                </span>
+                <span className="text-gray-100">{getMemberName(recipient?.id ?? '')}</span>
               </p>
             </>
           ) : (
@@ -128,13 +138,9 @@ export function ExpenseCard({
                 )}
               </div>
               <p className="text-sm text-gray-400">
-                Paid by {currentUser && payer?.id === currentUser.id ? (
-                  <span className="text-yellow-400">[{payer?.name || 'Unknown'}]</span>
-                ) : (payer?.name || 'Unknown')}
+                Paid by <span className="text-gray-200">{getMemberName(payer?.id ?? '')}</span>
                 {creator && creator.id !== expense.paidBy && (
-                  <span className="text-gray-500"> (added by {currentUser && creator.id === currentUser.id ? (
-                    <span className="text-yellow-400">[{creator.name}]</span>
-                  ) : creator.name})</span>
+                  <span className="text-gray-500"> (added by {getMemberName(creator.id)})</span>
                 )}
               </p>
             </>
@@ -167,7 +173,7 @@ export function ExpenseCard({
             {canEditTags && !editingTags && (
               <button
                 onClick={() => setEditingTags(true)}
-                className="text-xs text-gray-500 hover:text-gray-300"
+                className="text-xs text-gray-500 hover:text-gray-300 min-h-[28px] px-1.5 flex items-center"
               >
                 + tag
               </button>
@@ -279,7 +285,7 @@ export function ExpenseCard({
               <span className="text-green-400">Confirmed by recipient</span>
             ) : (
               <span className="text-yellow-400">
-                Awaiting confirmation from {recipient && currentUser && recipient.id === currentUser.id ? `[${recipient?.name || 'recipient'}]` : (recipient?.name || 'recipient')}
+                Awaiting confirmation from {getMemberName(recipient?.id ?? '')}
               </span>
             )}
           </div>
@@ -311,34 +317,36 @@ export function ExpenseCard({
                       {userSplit.signedOff && (
                         <span className="text-xs text-green-400 font-medium">Accepted</span>
                       )}
+                      {(expense.splits.length > 1 || unclaimedAmount > 0) && unclaimedAmount > 0 && (
+                        <span className="text-xs text-gray-500">· {formatCurrency(unclaimedAmount, currency)} unclaimed</span>
+                      )}
                     </span>
-                    <span className="text-gray-400">
+                    <span className="flex items-center gap-1 text-gray-400">
                       {formatCurrency(userDisplayAmount, currency)}
+                      {(expense.splits.length > 1 || unclaimedAmount > 0) && (
+                        <svg className="w-4 h-4 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      )}
                     </span>
                   </div>
                 );
               })()}
-              {(expense.splits.length > 1 || unclaimedAmount > 0) && (
-                <p className="text-xs text-cyan-400 mt-1">
-                  Tap to see {expense.splits.length > 1 ? `all ${expense.splits.length} participants` : 'details'}
-                  {unclaimedAmount > 0 && ` (${formatCurrency(unclaimedAmount, currency)} unclaimed)`}
-                </p>
-              )}
             </div>
           )}
 
           {/* Collapsed view: no user split, show summary */}
           {!expanded && !userSplit && (
             <div
-              className="cursor-pointer"
+              className="cursor-pointer flex justify-between items-center"
               onClick={() => setExpanded(true)}
             >
               <p className="text-sm text-gray-400">
                 {expense.splits.length} participant{expense.splits.length !== 1 ? 's' : ''}
               </p>
-              <p className="text-xs text-cyan-400 mt-1">
-                Tap to see details
-              </p>
+              <svg className="w-4 h-4 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
             </div>
           )}
 
@@ -350,11 +358,16 @@ export function ExpenseCard({
                 onClick={() => setExpanded(false)}
               >
                 <p className="text-xs text-gray-500">
-                  Split ({expense.splitType}):
+                  Split ({expense.splitType === 'shares' ? 'by shares' : expense.splitType})
+                  {expense.splitType !== 'shares' && expense.discount && (
+                    <span className="ml-1">
+                      · −{formatCurrency(calculateDiscountAmount(expense.discount, expense.discountType, calculateBillGoc(expense.amount, expense.discount, expense.discountType)), currency)}
+                    </span>
+                  )}
                 </p>
-                <p className="text-xs text-cyan-400">
-                  Tap to collapse
-                </p>
+                <svg className="w-4 h-4 text-cyan-500 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
               </div>
               <div className="space-y-1">
                 {expense.splits.map((split) => {
@@ -385,9 +398,16 @@ export function ExpenseCard({
                                 setClaimingItemId(null);
                               }}
                               disabled={claimingItemId === singleItem.id}
-                              className="text-xs px-1.5 py-0.5 rounded bg-gray-600 text-gray-300 hover:bg-gray-500 disabled:opacity-50 flex-shrink-0"
+                              className="min-w-[32px] min-h-[32px] flex items-center justify-center rounded bg-gray-600 text-gray-300 hover:bg-gray-500 disabled:opacity-50 flex-shrink-0"
+                              title="Unclaim item"
                             >
-                              {claimingItemId === singleItem.id ? '...' : '×'}
+                              {claimingItemId === singleItem.id ? (
+                                <span className="text-xs">...</span>
+                              ) : (
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              )}
                             </button>
                           )}
                         </div>
@@ -414,9 +434,16 @@ export function ExpenseCard({
                                         setClaimingItemId(null);
                                       }}
                                       disabled={claimingItemId === item.id}
-                                      className="px-1 rounded bg-gray-600 text-gray-300 hover:bg-gray-500 disabled:opacity-50 flex-shrink-0"
+                                      className="min-w-[32px] min-h-[32px] flex items-center justify-center rounded bg-gray-600 text-gray-300 hover:bg-gray-500 disabled:opacity-50 flex-shrink-0"
+                                      title="Unclaim item"
                                     >
-                                      {claimingItemId === item.id ? '..' : '×'}
+                                      {claimingItemId === item.id ? (
+                                        <span className="text-xs">...</span>
+                                      ) : (
+                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                      )}
                                     </button>
                                   )}
                                 </div>
@@ -503,9 +530,12 @@ export function ExpenseCard({
             <div className="mt-2 pt-2 border-t border-gray-700">
               <button
                 onClick={() => setExpanded(true)}
-                className="text-xs text-orange-400 hover:text-orange-300"
+                className="text-xs text-orange-400 hover:text-orange-300 flex items-center gap-1"
               >
-                {unclaimedCount} unclaimed item{unclaimedCount !== 1 ? 's' : ''} - tap to view
+                {unclaimedCount} unclaimed item{unclaimedCount !== 1 ? 's' : ''}
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
               </button>
             </div>
           )}
@@ -547,7 +577,7 @@ export function ExpenseCard({
 
       <div className="flex justify-between items-center mt-3">
         <p className="text-xs text-gray-500">
-          {formatRelativeTime(expense.createdAt)}
+          {formatRelativeTime(expense.receiptDate ?? expense.createdAt)}
         </p>
         {showSignOff && userSplit && !userSplit.signedOff && (
           <SignOffButton expense={expense} compact />
@@ -587,6 +617,17 @@ export function ExpenseCard({
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        title="Delete transaction"
+        message={`Are you sure you want to delete "${expense.description}"? This cannot be undone.`}
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        destructive
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
     </div>
   );
 }

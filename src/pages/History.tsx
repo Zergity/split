@@ -43,7 +43,7 @@ export function History() {
   );
 
   const sortedExpenses = [...signedExpenses].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    (a, b) => new Date(b.receiptDate ?? b.createdAt).getTime() - new Date(a.receiptDate ?? a.createdAt).getTime()
   );
 
   return (

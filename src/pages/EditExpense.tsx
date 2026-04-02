@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { ReceiptItems } from '../components/ReceiptItems';
-import { ReceiptItem } from '../types';
-import { roundNumber } from '../utils/balances';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ReceiptItem, DiscountType } from '../types';
+import { roundNumber, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal } from '../utils/balances';
+import { YouBadge } from '../components/YouBadge';
 
 export function EditExpense() {
   const navigate = useNavigate();
@@ -15,59 +17,100 @@ export function EditExpense() {
   const [description, setDescription] = useState('');
   const [paidBy, setPaidBy] = useState('');
   const [items, setItems] = useState<ReceiptItem[]>([]);
-  const [manualTotal, setManualTotal] = useState<number | null>(null);
+  const [discount, setDiscount] = useState<number | undefined>(undefined);
+  const [discountType, setDiscountType] = useState<DiscountType>('percentage');
+  const [totalAmount, setTotalAmount] = useState<number>(0);
+  const [showDiscountInput, setShowDiscountInput] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const [receiptDate, setReceiptDate] = useState<string>('');
+  const [pendingModeSwitch, setPendingModeSwitch] = useState<'items' | 'shares' | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [splitMode, setSplitMode] = useState<'items' | 'shares'>('items');
+  const [memberShares, setMemberShares] = useState<Record<string, number>>({});
 
   // Initialize form with existing expense data
   useEffect(() => {
     if (expense && group) {
       setDescription(expense.description);
       setPaidBy(expense.paidBy);
+      setDiscount(expense.discount);
+      setDiscountType(expense.discountType || 'percentage');
+      setTotalAmount(expense.amount);
+      setReceiptDate(expense.receiptDate ?? expense.createdAt);
+      if (expense.discount) setShowDiscountInput(true);
 
-      // Use stored items if available, otherwise convert splits to items
-      if (expense.items && expense.items.length > 0) {
-        setItems(expense.items);
+      if (expense.splitType === 'shares') {
+        setSplitMode('shares');
+        const shares: Record<string, number> = {};
+        for (const split of expense.splits) {
+          shares[split.memberId] = split.value;
+        }
+        setMemberShares(shares);
       } else {
-        // Convert splits to items for backward compatibility
-        const convertedItems: ReceiptItem[] = expense.splits.map((split) => ({
-          id: crypto.randomUUID(),
-          description: '',
-          amount: split.amount,
-          memberId: split.memberId,
-        }));
-        setItems(convertedItems);
+        setSplitMode('items');
+        if (expense.items && expense.items.length > 0) {
+          setItems(expense.items);
+        } else {
+          const convertedItems: ReceiptItem[] = expense.splits.map((split) => ({
+            id: crypto.randomUUID(),
+            description: '',
+            amount: split.amount,
+            memberId: split.memberId,
+          }));
+          setItems(convertedItems);
+        }
       }
     }
   }, [expense, group]);
-
-  // Calculate totals from items
-  const itemsTotal = items.reduce((sum, i) => sum + i.amount, 0);
-  const totalAmount = manualTotal !== null ? manualTotal : itemsTotal;
-
-  // Calculate which members are included
-  const includedMemberIds = new Set(items.filter(i => i.memberId).map(i => i.memberId!));
 
   // Payer can fully edit, creator can only assign unassigned items, participant can edit own items
   const isPayer = !!(currentUser && expense && currentUser.id === expense.paidBy);
   const isCreator = !!(currentUser && expense && currentUser.id === expense.createdBy);
   const isParticipant = !!(currentUser && expense && expense.items?.some(item => item.memberId === currentUser.id));
   const canEdit = isPayer || isCreator || isParticipant;
-  const canOnlyAssign = isCreator && !isPayer; // Creator who is not payer can only assign
-  const canOnlyEditOwnItems = isParticipant && !isPayer && !isCreator; // Participant can only edit own item descriptions
+  const canOnlyAssign = isCreator && !isPayer;
+  const canOnlyEditOwnItems = isParticipant && !isPayer && !isCreator;
 
-  // Calculate splits from items
+  const billGoc = useMemo(() => {
+    if (splitMode !== 'items') return totalAmount;
+    if (items.length > 0) {
+      return roundNumber(items.reduce((sum, item) => sum + item.amount, 0), 2);
+    }
+    return calculateBillGoc(totalAmount, discount, discountType);
+  }, [items, totalAmount, discount, discountType, splitMode]);
+
+  const discountAmount = useMemo(() => {
+    if (splitMode !== 'items') return 0;
+    return calculateDiscountAmount(discount, discountType, billGoc);
+  }, [billGoc, discount, discountType, splitMode]);
+
+  const totalShares = Object.values(memberShares).reduce((sum, s) => sum + s, 0);
+  const allSharesEqual = totalShares > 0 && Object.values(memberShares).every(s => s === 1);
+
+  const includedMemberIds = splitMode === 'items'
+    ? new Set(items.filter(i => i.memberId).map(i => i.memberId!))
+    : new Set(Object.keys(memberShares));
+
   const calculateSplits = () => {
     const memberTotals = new Map<string, number>();
+    const splitBillGoc = items.reduce((sum, i) => sum + i.amount, 0);
+    const splitDiscountAmount = discountType === 'flat'
+      ? (discount ?? 0)
+      : splitBillGoc * ((discount ?? 0) / 100);
+
     for (const item of items) {
       if (item.memberId && item.amount > 0) {
+        const itemDiscount = splitBillGoc > 0
+          ? roundNumber(splitDiscountAmount * item.amount / splitBillGoc, 2)
+          : 0;
+        const effectiveAmount = roundNumber(item.amount - itemDiscount, 2);
         const current = memberTotals.get(item.memberId) || 0;
-        memberTotals.set(item.memberId, roundNumber(current + item.amount, 2));
+        memberTotals.set(item.memberId, roundNumber(current + effectiveAmount, 2));
       }
     }
 
-    // Payer takes the difference between total and assigned items sum
     if (paidBy && totalAmount > 0) {
       const currentItemsSum = Array.from(memberTotals.values()).reduce((sum, v) => sum + v, 0);
       const diff = roundNumber(totalAmount - currentItemsSum, 2);
@@ -80,35 +123,71 @@ export function EditExpense() {
     return memberTotals;
   };
 
-  const handleTotalChange = (value: string) => {
-    const parsed = parseFloat(value);
-    if (!isNaN(parsed) && parsed >= 0) {
-      const currentSum = items.reduce((sum, i) => sum + i.amount, 0);
-      const diff = roundNumber(parsed - currentSum, 2);
-
-      if (Math.abs(diff) > 0.001 && items.length > 0) {
-        const payerItem = items.find(i => i.memberId === paidBy);
-        const targetItem = payerItem || items[0];
-        const newAmount = roundNumber(targetItem.amount + diff, 2);
-        setItems(items.map(item =>
-          item.id === targetItem.id ? { ...item, amount: Math.max(0, newAmount) } : item
-        ));
-      }
-      setManualTotal(null);
-    } else if (value === '' || value === '0') {
-      setManualTotal(null);
+  const handleItemsChange = (newItems: ReceiptItem[]) => {
+    const newBillGoc = newItems.reduce((sum, i) => sum + i.amount, 0);
+    const newDiscountAmount = discountType === 'flat'
+      ? (discount ?? 0)
+      : newBillGoc * ((discount ?? 0) / 100);
+    const newTotal = roundNumber(newBillGoc - newDiscountAmount, 2);
+    setItems(newItems);
+    setTotalAmount(Math.max(0, newTotal));
+    if (newItems.length === 0) {
+      setDiscount(undefined);
     }
   };
 
-  const handleItemsChange = (newItems: ReceiptItem[]) => {
-    setItems(newItems);
-    setManualTotal(null);
+  const handleTotalChange = (value: string) => {
+    const parsed = parseFloat(value);
+    if (!isNaN(parsed) && parsed >= 0) {
+      const newBillGoc = calculateBillGoc(parsed, discount, discountType);
+      const currentBillGoc = items.reduce((sum, i) => sum + i.amount, 0);
+      const diff = roundNumber(newBillGoc - currentBillGoc, 2);
+
+      if (Math.abs(diff) > 0.001) {
+        const payerItems = items.filter(i => i.memberId === paidBy);
+        if (payerItems.length > 0) {
+          const firstPayerItem = payerItems[0];
+          const newItemAmount = roundNumber(firstPayerItem.amount + diff, 2);
+          if (newItemAmount < 0) {
+            setError('Adjustment would make item amount negative');
+            return;
+          }
+          setItems(items.map(item =>
+            item.id === firstPayerItem.id ? { ...item, amount: newItemAmount } : item
+          ));
+        } else if (items.length === 0 || paidBy) {
+          const newItem: ReceiptItem = {
+            id: crypto.randomUUID(),
+            description: '',
+            amount: newBillGoc,
+            memberId: paidBy || undefined,
+          };
+          setItems(newItem.amount > 0 ? [...items, newItem] : items);
+        }
+      }
+      setTotalAmount(parsed);
+    } else if (value === '' || value === '0') {
+      setTotalAmount(0);
+    }
   };
 
   const handleMemberTap = (memberId: string) => {
+    if (splitMode === 'shares') {
+      if (!isPayer) return;
+      setMemberShares(prev => {
+        const newShares = { ...prev };
+        if (memberId in newShares) {
+          delete newShares[memberId];
+        } else {
+          newShares[memberId] = 1;
+        }
+        return newShares;
+      });
+      return;
+    }
+
     if (selectedItemId) {
       const selectedItem = items.find(i => i.id === selectedItemId);
-      // Creator can only assign to unassigned items
       if (canOnlyAssign && selectedItem?.memberId) {
         setSelectedItemId(null);
         return;
@@ -122,7 +201,6 @@ export function EditExpense() {
 
     const isIncluded = includedMemberIds.has(memberId);
     if (isIncluded) {
-      // Creator cannot unassign items
       if (canOnlyAssign) return;
       handleItemsChange(items.map(item =>
         item.memberId === memberId ? { ...item, memberId: undefined } : item
@@ -134,7 +212,6 @@ export function EditExpense() {
           item.id === unassignedItem.id ? { ...item, memberId } : item
         ));
       } else {
-        // Creator cannot add new items
         if (canOnlyAssign) return;
         const newItem: ReceiptItem = {
           id: crypto.randomUUID(),
@@ -181,75 +258,139 @@ export function EditExpense() {
       return;
     }
 
-    if (totalAmount <= 0) {
-      setError('Total amount must be greater than 0');
-      return;
-    }
-
     if (!paidBy) {
       setError('Select who paid');
       return;
     }
 
-    if (items.length === 0) {
-      setError('Add at least one item');
-      return;
+    if (splitMode === 'items') {
+      if (totalAmount <= 0) {
+        setError('Total amount must be greater than 0');
+        return;
+      }
+      if (items.length === 0) {
+        setError('Add at least one item');
+        return;
+      }
+      if (discountType === 'flat' && discount) {
+        const bg = items.reduce((sum, i) => sum + i.amount, 0);
+        if (discount >= bg) {
+          setError('Flat discount must be less than items subtotal');
+          return;
+        }
+      }
+    } else {
+      if (totalAmount <= 0) {
+        setError('Total amount must be greater than 0');
+        return;
+      }
+      if (Object.keys(memberShares).length === 0) {
+        setError('Add at least one member');
+        return;
+      }
     }
 
     setSubmitting(true);
 
     try {
-      const memberTotals = calculateSplits();
-      const oldSplitsMap = new Map(
-        expense.splits.map((s) => [s.memberId, s])
-      );
+      if (splitMode === 'items') {
+        const memberTotals = calculateSplits();
+        const oldSplitsMap = new Map(expense.splits.map((s) => [s.memberId, s]));
 
-      // Build splits with sign-off logic
-      const splits = Array.from(memberTotals.entries()).map(([memberId, amount]) => {
-        const oldSplit = oldSplitsMap.get(memberId);
+        const splits = Array.from(memberTotals.entries()).map(([memberId, amount]) => {
+          const oldSplit = oldSplitsMap.get(memberId);
 
-        // Payer always auto-signs
-        if (memberId === paidBy) {
+          if (memberId === paidBy) {
+            return {
+              memberId,
+              value: amount,
+              amount,
+              signedOff: true,
+              signedAt: new Date().toISOString(),
+            };
+          }
+
+          if (!oldSplit || Math.abs(oldSplit.amount - amount) > 0.01) {
+            return {
+              memberId,
+              value: amount,
+              amount,
+              signedOff: false,
+              signedAt: undefined,
+              previousAmount: oldSplit?.amount,
+            };
+          }
+
           return {
             memberId,
             value: amount,
             amount,
-            signedOff: true,
-            signedAt: new Date().toISOString(),
+            signedOff: oldSplit.signedOff,
+            signedAt: oldSplit.signedAt,
+            previousAmount: oldSplit.previousAmount,
           };
-        }
+        });
 
-        // New participant or amount changed - require sign-off
-        if (!oldSplit || Math.abs(oldSplit.amount - amount) > 0.01) {
+        await updateExpense(expense.id, {
+          description: description.trim(),
+          amount: totalAmount,
+          paidBy,
+          splitType: 'exact',
+          splits,
+          items,
+          discount,
+          discountType: discount ? discountType : undefined,
+          receiptDate: receiptDate || undefined,
+        });
+      } else {
+        const oldSplitsMap = new Map(expense.splits.map((s) => [s.memberId, s]));
+
+        const sharesEntries = Object.entries(memberShares) as [string, number][];
+        const distributed = distributeByShares(totalAmount, sharesEntries, 2);
+        const splits = sharesEntries.map(([memberId, share]) => {
+          const amount = distributed.get(memberId) ?? 0;
+          const oldSplit = oldSplitsMap.get(memberId);
+
+          if (memberId === paidBy) {
+            return {
+              memberId,
+              value: share,
+              amount,
+              signedOff: true,
+              signedAt: new Date().toISOString(),
+            };
+          }
+
+          if (!oldSplit || Math.abs(oldSplit.amount - amount) > 0.01) {
+            return {
+              memberId,
+              value: share,
+              amount,
+              signedOff: false,
+              signedAt: undefined,
+              previousAmount: oldSplit?.amount,
+            };
+          }
+
           return {
             memberId,
-            value: amount,
+            value: share,
             amount,
-            signedOff: false,
-            signedAt: undefined,
-            previousAmount: oldSplit?.amount,
+            signedOff: oldSplit.signedOff,
+            signedAt: oldSplit.signedAt,
+            previousAmount: oldSplit.previousAmount,
           };
-        }
+        });
 
-        // Keep existing sign-off status
-        return {
-          memberId,
-          value: amount,
-          amount,
-          signedOff: oldSplit.signedOff,
-          signedAt: oldSplit.signedAt,
-          previousAmount: oldSplit.previousAmount,
-        };
-      });
-
-      await updateExpense(expense.id, {
-        description: description.trim(),
-        amount: totalAmount,
-        paidBy,
-        splitType: 'exact',
-        splits,
-        items,
-      });
+        await updateExpense(expense.id, {
+          description: description.trim(),
+          amount: totalAmount,
+          paidBy,
+          splitType: 'shares',
+          splits,
+          receiptDate: receiptDate || undefined,
+        });
+      }
 
       navigate('/expenses');
     } catch (err) {
@@ -280,6 +421,7 @@ export function EditExpense() {
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
+        {/* 1. Description */}
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1">
             Description
@@ -294,6 +436,21 @@ export function EditExpense() {
           />
         </div>
 
+        {/* 2. Payment date */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">
+            Payment date
+          </label>
+          <input
+            type="datetime-local"
+            value={receiptDate ? toLocalDatetimeInput(receiptDate) : ''}
+            onChange={(e) => setReceiptDate(e.target.value ? parseDatetimeLocal(e.target.value) : expense?.createdAt ?? '')}
+            disabled={canOnlyAssign || canOnlyEditOwnItems}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 disabled:opacity-50"
+          />
+        </div>
+
+        {/* 3. Paid by */}
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1">
             Paid by
@@ -313,12 +470,13 @@ export function EditExpense() {
           </select>
         </div>
 
-        {/* Split between - draggable members */}
+        {/* 4. Split between - member chips */}
         {!canOnlyEditOwnItems && (
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
               Split between
             </label>
+
             <div className="flex flex-wrap gap-2">
               {group.members.map((member) => {
                 const isIncluded = includedMemberIds.has(member.id);
@@ -326,7 +484,7 @@ export function EditExpense() {
                 return (
                   <div
                     key={member.id}
-                    draggable
+                    draggable={splitMode === 'items'}
                     onClick={() => handleMemberTap(member.id)}
                     onDragStart={(e) => handleMemberDragStart(e, member.id)}
                     className={`px-3 py-1.5 rounded-full text-sm cursor-grab active:cursor-grabbing select-none transition-colors ${
@@ -335,56 +493,239 @@ export function EditExpense() {
                         : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                     }`}
                   >
-                    {isYou ? <span className="text-yellow-400">[{member.name}]</span> : member.name}
+                    {member.name}{isYou && <> <YouBadge /></>}
                   </div>
                 );
               })}
             </div>
             <p className="text-xs text-gray-500 mt-2">
-              Tap item then tap member, or drag member to item
+              {splitMode === 'items'
+                ? 'Tap item then tap member, or drag member to item'
+                : 'Tap to add/remove from expense'}
             </p>
           </div>
         )}
 
-        {/* Amounts section */}
+        {/* 5. Total + Discount (same row) */}
         <div>
-          <div className="flex justify-between items-center mb-2">
-            <label className="block text-sm font-medium text-gray-300">
-              Amounts
-            </label>
-            {!canOnlyAssign && !canOnlyEditOwnItems && includedMemberIds.size > 0 && (
+          <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+            <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Total</span>
+            <input
+              type="number"
+              min="0"
+              value={totalAmount || ''}
+              disabled={canOnlyAssign || canOnlyEditOwnItems}
+              onChange={(e) => {
+                if (splitMode === 'shares') {
+                  const parsed = parseFloat(e.target.value);
+                  if (!isNaN(parsed) && parsed >= 0) {
+                    setTotalAmount(parsed);
+                  } else if (e.target.value === '' || e.target.value === '0') {
+                    setTotalAmount(0);
+                  }
+                } else {
+                  handleTotalChange(e.target.value);
+                }
+              }}
+              placeholder="0"
+              className="flex-1 min-w-0 bg-transparent px-3 py-2 text-right text-lg font-semibold text-gray-100 disabled:opacity-50"
+            />
+            <span className="px-2 py-2 text-sm text-gray-500">K</span>
+          </div>
+          <div className="flex justify-between items-center mt-1">
+            <p className="text-xs text-gray-500">
+              {discount
+                ? `Amount paid · Original: ${billGoc.toLocaleString()}${group.currency}`
+                : 'Amount paid'}
+            </p>
+            {splitMode === 'items' && totalAmount > 0 && !canOnlyAssign && !canOnlyEditOwnItems && !showDiscountInput && !discount && (
               <button
                 type="button"
-                onClick={() => {
-                  // Split total equally among all existing items
-                  if (items.length === 0) return;
-                  const splitAmount = roundNumber(totalAmount / items.length, 2);
-                  const newItems = items.map(item => ({
-                    ...item,
-                    amount: splitAmount,
-                  }));
-                  handleItemsChange(newItems);
-                }}
-                className="text-sm text-cyan-400 hover:text-cyan-300"
+                onClick={() => setShowDiscountInput(true)}
+                className="text-xs text-cyan-500 hover:text-cyan-400"
               >
-                Split equally
+                + Add discount
               </button>
             )}
           </div>
-          <ReceiptItems
-            items={items}
-            members={group.members}
-            currency={group.currency}
-            totalAmount={totalAmount}
-            onTotalChange={handleTotalChange}
-            onChange={handleItemsChange}
-            payerId={paidBy}
-            selectedItemId={selectedItemId}
-            onItemSelect={handleItemSelect}
-            assignOnly={canOnlyAssign || canOnlyEditOwnItems}
-            editableItemIds={canOnlyEditOwnItems ? new Set(items.filter(i => i.memberId === currentUser?.id).map(i => i.id)) : undefined}
-          />
+          {splitMode === 'items' && totalAmount > 0 && !canOnlyAssign && !canOnlyEditOwnItems && (showDiscountInput || discount) && (
+            <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden mt-2">
+              <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Discount</span>
+              <input
+                type="number"
+                min="0"
+                autoFocus
+                value={discount || ''}
+                onChange={(e) => {
+                  const raw = e.target.value ? parseFloat(e.target.value) : undefined;
+                  if (discountType === 'flat') {
+                    setDiscount(raw && raw > 0 ? raw : undefined);
+                  } else {
+                    setDiscount(raw && raw > 0 && raw <= 100 ? raw : undefined);
+                  }
+                }}
+                placeholder="0"
+                className="flex-1 bg-transparent px-3 py-2 text-right text-sm text-gray-100"
+              />
+              <select
+                value={discountType}
+                onChange={(e) => setDiscountType(e.target.value as DiscountType)}
+                className="bg-gray-800 border-l border-gray-700 px-2 py-2 text-gray-100 text-sm"
+              >
+                <option value="percentage">%</option>
+                <option value="flat">K</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => { setDiscount(undefined); setShowDiscountInput(false); }}
+                className="px-2 py-2 text-gray-600 hover:text-red-400 text-sm"
+              >
+                ×
+              </button>
+            </div>
+          )}
         </div>
+
+        {/* 7. Split mode toggle - payer only */}
+        {isPayer && (
+          <div className="flex bg-gray-800 rounded-lg p-0.5">
+            <button
+              type="button"
+              onClick={() => {
+                if (splitMode === 'shares') {
+                  if (Object.keys(memberShares).length > 0) { setPendingModeSwitch('items'); return; }
+                  setMemberShares({});
+                  setDiscount(undefined);
+                  setDiscountType('percentage');
+                  setSplitMode('items');
+                }
+              }}
+              className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
+                splitMode === 'items'
+                  ? 'bg-cyan-600 text-white font-semibold'
+                  : 'text-gray-500'
+              }`}
+            >
+              Items
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (splitMode === 'items') {
+                  if (items.length > 0) { setPendingModeSwitch('shares'); return; }
+                  setItems([]);
+                  setDiscount(undefined);
+                  setDiscountType('percentage');
+                  setSplitMode('shares');
+                }
+              }}
+              className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
+                splitMode === 'shares'
+                  ? 'bg-cyan-600 text-white font-semibold'
+                  : 'text-gray-500'
+              }`}
+            >
+              Shares
+            </button>
+          </div>
+        )}
+
+        {/* 8. Split details */}
+        {splitMode === 'items' ? (
+          <div>
+            <div className="flex justify-between items-center mb-2">
+              <label className="block text-sm font-medium text-gray-300">Amounts</label>
+              {!canOnlyAssign && !canOnlyEditOwnItems && includedMemberIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (items.length === 0) return;
+                    const rawTotal = items.reduce((sum, i) => sum + i.amount, 0);
+                    const splitAmount = roundNumber(rawTotal / items.length, 2);
+                    handleItemsChange(items.map(item => ({ ...item, amount: splitAmount })));
+                  }}
+                  className="text-sm text-cyan-400 hover:text-cyan-300"
+                >
+                  Split equally
+                </button>
+              )}
+            </div>
+            <ReceiptItems
+              items={items}
+              members={group.members}
+              currency={group.currency}
+              discountAmount={discountAmount}
+              billGoc={billGoc}
+              onChange={handleItemsChange}
+              payerId={paidBy}
+              selectedItemId={selectedItemId}
+              onItemSelect={handleItemSelect}
+              assignOnly={canOnlyAssign || canOnlyEditOwnItems}
+              editableItemIds={canOnlyEditOwnItems ? new Set(items.filter(i => i.memberId === currentUser?.id).map(i => i.id)) : undefined}
+            />
+          </div>
+        ) : (
+          <div>
+            <div className="flex justify-between items-center mb-2">
+              <label className="block text-sm font-medium text-gray-300">Shares</label>
+              <span className="text-sm text-gray-500 italic">
+                {allSharesEqual ? 'All equal' : `Total: ${totalShares} shares`}
+              </span>
+            </div>
+
+            <div className="space-y-1">
+              {Object.entries(memberShares).map(([memberId, share]) => {
+                const member = group.members.find(m => m.id === memberId);
+                if (!member) return null;
+                const isYou = currentUser && memberId === currentUser.id;
+                const percentage = totalShares > 0 ? roundNumber((share / totalShares) * 100) : 0;
+                const memberAmount = totalShares > 0 ? roundNumber(totalAmount * share / totalShares, 2) : 0;
+
+                return (
+                  <div key={memberId} className="flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+                    <div>
+                      <span className="text-sm text-gray-100">
+                        {member.name}{isYou && <> <YouBadge /></>}
+                      </span>
+                      <span className="text-xs text-gray-500 ml-2">{share}/{totalShares} · {percentage}%</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-green-400 font-medium">{memberAmount.toLocaleString()}{group.currency}</span>
+                      {isPayer && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            disabled={share <= 1}
+                            onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: Math.max(1, prev[memberId] - 1) }))}
+                            className="w-7 h-7 flex items-center justify-center bg-gray-700 rounded-md text-white disabled:opacity-40"
+                          >−</button>
+                          <span className="text-lg font-bold text-white min-w-[22px] text-center">{share}</span>
+                          <button
+                            type="button"
+                            onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: prev[memberId] + 1 }))}
+                            className="w-7 h-7 flex items-center justify-center bg-cyan-600 rounded-md text-white"
+                          >+</button>
+                        </div>
+                      )}
+                      {!isPayer && (
+                        <span className="text-lg font-bold text-white min-w-[22px] text-center">{share}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {totalAmount > 0 && (
+              <div className="mt-3 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
+                <div className="flex justify-between text-sm font-semibold">
+                  <span className="text-gray-300">Total to split</span>
+                  <span className="text-white">{totalAmount.toLocaleString()}{group.currency}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {error && (
           <div className="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg">
@@ -392,6 +733,7 @@ export function EditExpense() {
           </div>
         )}
 
+        {/* 9. Submit */}
         <div className="flex gap-3">
           <button
             type="button"
@@ -402,13 +744,48 @@ export function EditExpense() {
           </button>
           <button
             type="submit"
-            disabled={submitting || items.length === 0}
+            disabled={
+              submitting ||
+              (splitMode === 'items'
+                ? items.length === 0
+                : Object.keys(memberShares).length === 0 || totalAmount <= 0)
+            }
             className="flex-1 bg-cyan-600 text-white py-3 rounded-lg font-medium hover:bg-cyan-700 disabled:opacity-50"
           >
             {submitting ? 'Saving...' : 'Save Changes'}
           </button>
         </div>
       </form>
+
+      <ConfirmDialog
+        open={pendingModeSwitch !== null}
+        title={pendingModeSwitch === 'shares' ? 'Switch to Shares' : 'Switch to Items'}
+        message={pendingModeSwitch === 'shares' ? 'Your items will be cleared. This cannot be undone.' : 'Your shares will be cleared. This cannot be undone.'}
+        confirmLabel="Clear & Switch"
+        destructive
+        onConfirm={() => {
+          if (pendingModeSwitch === 'items') {
+            const placeholders: ReceiptItem[] = Object.keys(memberShares).map(memberId => ({
+              id: crypto.randomUUID(),
+              description: '',
+              amount: 0,
+              memberId,
+            }));
+            setMemberShares({});
+            setDiscount(undefined);
+            setDiscountType('percentage');
+            setItems(placeholders);
+            setSplitMode('items');
+          } else if (pendingModeSwitch === 'shares') {
+            setItems([]);
+            setDiscount(undefined);
+            setDiscountType('percentage');
+            setSplitMode('shares');
+          }
+          setPendingModeSwitch(null);
+        }}
+        onCancel={() => setPendingModeSwitch(null)}
+      />
     </div>
   );
 }

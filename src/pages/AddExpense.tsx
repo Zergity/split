@@ -1,66 +1,188 @@
-import { useState } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { ReceiptCapture } from '../components/ReceiptCapture';
 import { ReceiptItems } from '../components/ReceiptItems';
-import { ReceiptItem, ReceiptOCRResult } from '../types';
-import { roundNumber, getTagColor } from '../utils/balances';
+import { ConfirmDialog } from '../components/ConfirmDialog';
+import { ReceiptItem, ReceiptOCRResult, DiscountType } from '../types';
+import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal } from '../utils/balances';
+import { YouBadge } from '../components/YouBadge';
 
 export function AddExpense() {
   const navigate = useNavigate();
-  const { group, currentUser, createExpense } = useApp();
+  const { group, currentUser, createExpense, expenses } = useApp();
 
   const [description, setDescription] = useState('');
   const [paidBy, setPaidBy] = useState(currentUser?.id || '');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [receiptDate, setReceiptDate] = useState<string | undefined>(undefined);
+  const [receiptDate, setReceiptDate] = useState<string>(() => new Date().toISOString());
   const [items, setItems] = useState<ReceiptItem[]>([]);
   const [discount, setDiscount] = useState<number | undefined>(undefined);
-  const [manualTotal, setManualTotal] = useState<number | null>(null);
+  const [discountType, setDiscountType] = useState<DiscountType>('percentage');
+  const [totalAmount, setTotalAmount] = useState<number>(0);
+  const [hasManualTotal, setHasManualTotal] = useState(false);
+  const [showDiscountInput, setShowDiscountInput] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
-  // Calculate totals from items, or use manual total if set
-  const itemsTotal = items.reduce((sum, i) => sum + i.amount, 0);
-  const totalAmount = manualTotal !== null ? manualTotal : itemsTotal;
+  const [splitMode, setSplitMode] = useState<'items' | 'shares'>('items');
+  const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
+  const [memberShares, setMemberShares] = useState<Record<string, number>>({});
+  const [pendingModeSwitch, setPendingModeSwitch] = useState<'items' | 'shares' | null>(null);
 
-  // Calculate which members are included (have at least one item assigned)
-  const includedMemberIds = new Set(items.filter(i => i.memberId).map(i => i.memberId!));
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Calculate splits from items, payer takes the rest
-  const calculateSplits = () => {
-    const memberTotals = new Map<string, number>();
-    for (const item of items) {
-      if (item.memberId && item.amount > 0) {
-        const current = memberTotals.get(item.memberId) || 0;
-        memberTotals.set(item.memberId, roundNumber(current + item.amount, 2));
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowSuggestions(false);
       }
-    }
+    };
 
-    // Payer takes the difference between total and items sum
-    if (paidBy && totalAmount > 0) {
-      const currentItemsSum = Array.from(memberTotals.values()).reduce((sum, v) => sum + v, 0);
-      const diff = roundNumber(totalAmount - currentItemsSum, 2);
+    if (showSuggestions) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showSuggestions]);
+
+  const tagSuggestions = useMemo(() => {
+    const freq = new Map<string, number>();
+    expenses.forEach(e =>
+      e.tags?.filter(t => t !== 'deleted').forEach(t =>
+        freq.set(t, (freq.get(t) || 0) + 1)
+      )
+    );
+    return [...freq.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([tag]) => tag);
+  }, [expenses]);
+
+  const filteredSuggestions = useMemo(() => {
+    if (!tagInput.trim()) return [];
+    const input = tagInput.toLowerCase().trim();
+    return tagSuggestions.filter(tag => tag.startsWith(input) && !tags.includes(tag));
+  }, [tagInput, tagSuggestions, tags]);
+
+  const showCreateOption = tagInput.trim() && filteredSuggestions.length === 0 && !tags.includes(tagInput.trim().toLowerCase());
+
+  const hasItems = items.length > 0;
+
+  const totalShares = Object.values(memberShares).reduce((sum, s) => sum + s, 0);
+  const allSharesEqual = totalShares > 0 && Object.values(memberShares).every(s => s === 1);
+
+  const billGoc = useMemo(() => {
+    if (splitMode !== 'items') return totalAmount;
+    if (hasManualTotal) return calculateBillGoc(totalAmount, discount, discountType);
+    if (items.length > 0) {
+      return roundNumber(items.reduce((sum, item) => sum + item.amount, 0), 2);
+    }
+    return calculateBillGoc(totalAmount, discount, discountType);
+  }, [items, totalAmount, discount, discountType, splitMode, hasManualTotal]);
+
+  const discountAmount = useMemo(() => {
+    if (splitMode !== 'items') return 0;
+    // Always compute discount from the pre-discount subtotal (billGoc)
+    return calculateDiscountAmount(discount, discountType, billGoc);
+  }, [billGoc, discount, discountType, splitMode]);
+
+  const includedMemberIds = selectedMemberIds;
+
+  const handleItemsChange = (newItems: ReceiptItem[]) => {
+    setItems(newItems);
+    if (newItems.length === 0) {
+      setDiscount(undefined);
+      setHasManualTotal(false);
+    } else if (!hasManualTotal) {
+      const newBillGoc = newItems.reduce((sum, i) => sum + i.amount, 0);
+      const newDiscountAmount = discountType === 'flat'
+        ? (discount ?? 0)
+        : newBillGoc * ((discount ?? 0) / 100);
+      setTotalAmount(Math.max(0, roundNumber(newBillGoc - newDiscountAmount, 2)));
+    }
+  };
+
+  const handleTotalChange = (value: string) => {
+    setHasManualTotal(true);
+    const parsed = parseFloat(value);
+    if (!isNaN(parsed) && parsed >= 0) {
+      const newBillGoc = calculateBillGoc(parsed, discount, discountType);
+      const currentBillGoc = items.reduce((sum, i) => sum + i.amount, 0);
+      const diff = roundNumber(newBillGoc - currentBillGoc, 2);
+
       if (Math.abs(diff) > 0.001) {
-        const payerCurrent = memberTotals.get(paidBy) || 0;
-        memberTotals.set(paidBy, roundNumber(payerCurrent + diff, 2));
+        const payerItems = items.filter(i => i.memberId === paidBy);
+        if (payerItems.length > 0) {
+          const firstPayerItem = payerItems[0];
+          const newItemAmount = roundNumber(firstPayerItem.amount + diff, 2);
+          if (newItemAmount < 0) {
+            setError('Adjustment would make item amount negative');
+            return;
+          }
+          setItems(items.map(item =>
+            item.id === firstPayerItem.id ? { ...item, amount: newItemAmount } : item
+          ));
+        }
       }
+      setTotalAmount(parsed);
+    } else if (value === '' || value === '0') {
+      setTotalAmount(0);
     }
+  };
 
-    return memberTotals;
+  const executeModeSwitch = (mode: 'items' | 'shares') => {
+    if (mode === 'shares') {
+      setItems([]);
+      setDiscount(undefined);
+      setDiscountType('percentage');
+      setHasManualTotal(false);
+      setShowDiscountInput(false);
+      const shares: Record<string, number> = {};
+      selectedMemberIds.forEach(id => { shares[id] = memberShares[id] ?? 1; });
+      setMemberShares(shares);
+    } else {
+      setMemberShares({});
+      const placeholders: ReceiptItem[] = Array.from(selectedMemberIds).map(memberId => ({
+        id: crypto.randomUUID(),
+        description: '',
+        amount: 0,
+        memberId,
+      }));
+      setItems(placeholders);
+    }
+    setSplitMode(mode);
+    setPendingModeSwitch(null);
+  };
+
+  const handleSplitModeChange = (mode: 'items' | 'shares') => {
+    if (mode === splitMode) return;
+    const needsConfirm = mode === 'shares' ? hasItems : Object.keys(memberShares).length > 0;
+    if (needsConfirm) {
+      setPendingModeSwitch(mode);
+    } else {
+      executeModeSwitch(mode);
+    }
   };
 
   const handleReceiptProcessed = (result: ReceiptOCRResult) => {
-    // Store items without discount applied - discount will be applied via handleDiscountChange
+    setSplitMode('items');
     setItems(result.extracted.items);
+    const ocrMemberIds = new Set(result.extracted.items.filter(i => i.memberId).map(i => i.memberId!));
+    if (ocrMemberIds.size > 0) setSelectedMemberIds(ocrMemberIds);
+    setHasManualTotal(true);
 
-    // Set discount (will trigger recalculation if > 0)
     if (result.extracted.discount && result.extracted.discount > 0) {
-      handleDiscountChange(result.extracted.discount, result.extracted.items);
+      setDiscount(result.extracted.discount);
+      setDiscountType('percentage');
+      const ocrBillGoc = result.extracted.items.reduce((sum, i) => sum + i.amount, 0);
+      const ocrDiscountAmount = ocrBillGoc * (result.extracted.discount / 100);
+      setTotalAmount(Math.max(0, roundNumber(ocrBillGoc - ocrDiscountAmount, 2)));
     } else {
       setDiscount(undefined);
+      const ocrTotal = result.extracted.items.reduce((sum, i) => sum + i.amount, 0);
+      setTotalAmount(ocrTotal);
     }
 
     if (result.extracted.merchant) {
@@ -71,39 +193,6 @@ export function AddExpense() {
     }
   };
 
-  // Handle discount change - recalculate all item amounts
-  const handleDiscountChange = (newDiscount: number | undefined, currentItems?: ReceiptItem[]) => {
-    const itemsToUpdate = currentItems || items;
-    const oldDiscount = discount || 0;
-    const newDiscountValue = newDiscount || 0;
-
-    if (itemsToUpdate.length === 0) {
-      setDiscount(newDiscount);
-      return;
-    }
-
-    // Reverse old discount and apply new discount
-    const updatedItems = itemsToUpdate.map(item => {
-      // Reverse old discount to get original amount
-      const originalAmount = oldDiscount > 0
-        ? item.amount / (1 - oldDiscount / 100)
-        : item.amount;
-
-      // Apply new discount
-      const newAmount = newDiscountValue > 0
-        ? originalAmount * (1 - newDiscountValue / 100)
-        : originalAmount;
-
-      return {
-        ...item,
-        amount: roundNumber(newAmount, 2),
-      };
-    });
-
-    setItems(updatedItems);
-    setDiscount(newDiscount && newDiscount > 0 ? newDiscount : undefined);
-  };
-
   const handleReceiptError = (errorMessage: string) => {
     setError(errorMessage);
   };
@@ -111,86 +200,61 @@ export function AddExpense() {
   const handleClearReceipt = () => {
     setItems([]);
     setDiscount(undefined);
-    setReceiptDate(undefined);
+    setDiscountType('percentage');
+    setHasManualTotal(false);
+    setReceiptDate(new Date().toISOString());
     setDescription('');
-    setManualTotal(null);
+    setTotalAmount(0);
   };
 
-  const handleTotalChange = (value: string) => {
-    const parsed = parseFloat(value);
-    if (!isNaN(parsed) && parsed >= 0) {
-      // Calculate the difference between new total and current items sum
-      const currentSum = items.reduce((sum, i) => sum + i.amount, 0);
-      const diff = roundNumber(parsed - currentSum, 2);
-
-      if (Math.abs(diff) > 0.001 && items.length > 0) {
-        // Find payer's item or first item to adjust
-        const payerItem = items.find(i => i.memberId === paidBy);
-        const targetItem = payerItem || items[0];
-
-        // Update the target item's amount
-        const newAmount = roundNumber(targetItem.amount + diff, 2);
-        setItems(items.map(item =>
-          item.id === targetItem.id ? { ...item, amount: Math.max(0, newAmount) } : item
-        ));
-      }
-      setManualTotal(null); // Reset since we adjusted items
-    } else if (value === '' || value === '0') {
-      setManualTotal(null);
-    }
-  };
-
-  // Handle items change - also reset manualTotal so total auto-updates
-  const handleItemsChange = (newItems: ReceiptItem[]) => {
-    setItems(newItems);
-    setManualTotal(null); // Reset so total = sum of items
-  };
-
-  // Handle member tap - assign to selected item, or toggle inclusion
   const handleMemberTap = (memberId: string) => {
-    // If an item is selected, assign this member to it
+    const isIncluded = selectedMemberIds.has(memberId);
+
+    if (splitMode === 'shares') {
+      // Toggle both selectedMemberIds and memberShares together
+      setSelectedMemberIds(prev => {
+        const next = new Set(prev);
+        if (isIncluded) next.delete(memberId); else next.add(memberId);
+        return next;
+      });
+      setMemberShares(prev => {
+        const next = { ...prev };
+        if (isIncluded) delete next[memberId]; else next[memberId] = 1;
+        return next;
+      });
+      return;
+    }
+
+    // Items mode: assign to item if a slot is selected
     if (selectedItemId) {
       handleItemsChange(items.map(item =>
         item.id === selectedItemId ? { ...item, memberId } : item
       ));
+      // Ensure member is in selectedMemberIds when assigning
+      if (!isIncluded) {
+        setSelectedMemberIds(prev => new Set(prev).add(memberId));
+      }
       setSelectedItemId(null);
       return;
     }
 
-    const isIncluded = includedMemberIds.has(memberId);
-
+    // Toggle: remove member from all items, or add to selectedMemberIds
+    setSelectedMemberIds(prev => {
+      const next = new Set(prev);
+      if (isIncluded) next.delete(memberId); else next.add(memberId);
+      return next;
+    });
     if (isIncluded) {
-      // Remove all assignments for this member
       handleItemsChange(items.map(item =>
         item.memberId === memberId ? { ...item, memberId: undefined } : item
       ));
-    } else {
-      // Find first unassigned item
-      const unassignedItem = items.find(item => !item.memberId);
-      if (unassignedItem) {
-        // Assign to first unassigned item
-        handleItemsChange(items.map(item =>
-          item.id === unassignedItem.id ? { ...item, memberId } : item
-        ));
-      } else {
-        // Create new item for this member
-        const newItem: ReceiptItem = {
-          id: crypto.randomUUID(),
-          description: '',
-          amount: 0,
-          memberId,
-        };
-        handleItemsChange([...items, newItem]);
-      }
     }
   };
 
-  // Handle item selection for assignment
   const handleItemSelect = (itemId: string) => {
     setSelectedItemId(selectedItemId === itemId ? null : itemId);
   };
 
-  // Drag handlers for members
   const handleMemberDragStart = (e: React.DragEvent, memberId: string) => {
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('text/plain', memberId);
@@ -202,58 +266,88 @@ export function AddExpense() {
     e.preventDefault();
     setError(null);
 
-    if (!description.trim()) {
-      setError('Description is required');
-      return;
-    }
+    if (!description.trim()) { setError('Description is required'); return; }
+    if (!paidBy) { setError('Select who paid'); return; }
+    if (!currentUser) { setError('Select your name first'); return; }
 
-    if (totalAmount <= 0) {
-      setError('Total amount must be greater than 0');
-      return;
-    }
-
-    if (!paidBy) {
-      setError('Select who paid');
-      return;
-    }
-
-    if (!currentUser) {
-      setError('Select your name first');
-      return;
-    }
-
-    if (items.length === 0) {
-      setError('Add at least one item');
-      return;
+    if (splitMode === 'items') {
+      if (totalAmount <= 0) { setError('Total amount must be greater than 0'); return; }
+      if (items.length === 0) { setError('Add at least one item'); return; }
+      if (discountType === 'flat' && discount) {
+        const bg = items.reduce((sum, i) => sum + i.amount, 0);
+        if (discount >= bg) {
+          setError('Flat discount must be less than items subtotal');
+          return;
+        }
+      }
+    } else {
+      if (totalAmount <= 0) { setError('Total amount must be greater than 0'); return; }
+      if (selectedMemberIds.size === 0) { setError('Add at least one member'); return; }
     }
 
     setSubmitting(true);
 
     try {
-      // Build splits from item assignments
-      // Auto sign-off for payer and creator
-      const memberTotals = calculateSplits();
-      const splits = Array.from(memberTotals.entries()).map(([memberId, amount]) => ({
-        memberId,
-        value: amount,
-        amount: amount,
-        signedOff: memberId === paidBy || memberId === currentUser.id,
-        signedAt: (memberId === paidBy || memberId === currentUser.id) ? new Date().toISOString() : undefined,
-      }));
+      if (splitMode === 'items') {
+        const splitBillGoc = items.reduce((sum, i) => sum + i.amount, 0);
+        const splitDiscountAmount = discountType === 'flat'
+          ? (discount ?? 0)
+          : splitBillGoc * ((discount ?? 0) / 100);
 
-      await createExpense({
-        description: description.trim(),
-        amount: totalAmount,
-        paidBy,
-        createdBy: currentUser.id,
-        splitType: 'exact',
-        splits,
-        items, // Store items for later editing
-        discount, // Store discount percentage
-        tags: tags.length > 0 ? tags : undefined,
-        receiptDate,
-      });
+        const memberTotals = new Map<string, number>();
+        for (const item of items) {
+          if (item.memberId && item.amount > 0) {
+            const itemDiscount = splitBillGoc > 0
+              ? roundNumber(splitDiscountAmount * item.amount / splitBillGoc, 2)
+              : 0;
+            const effectiveAmount = roundNumber(item.amount - itemDiscount, 2);
+            const current = memberTotals.get(item.memberId) || 0;
+            memberTotals.set(item.memberId, roundNumber(current + effectiveAmount, 2));
+          }
+        }
 
+        if (paidBy && totalAmount > 0) {
+          const currentItemsSum = Array.from(memberTotals.values()).reduce((sum, v) => sum + v, 0);
+          const diff = roundNumber(totalAmount - currentItemsSum, 2);
+          if (Math.abs(diff) > 0.001) {
+            const payerCurrent = memberTotals.get(paidBy) || 0;
+            memberTotals.set(paidBy, roundNumber(payerCurrent + diff, 2));
+          }
+        }
+
+        const splits = Array.from(memberTotals.entries()).map(([memberId, amount]) => ({
+          memberId,
+          value: amount,
+          amount,
+          signedOff: memberId === paidBy || memberId === currentUser.id,
+          signedAt: (memberId === paidBy || memberId === currentUser.id) ? new Date().toISOString() : undefined,
+        }));
+
+        await createExpense({
+          description: description.trim(), amount: totalAmount, paidBy,
+          createdBy: currentUser.id, splitType: 'exact', splits,
+          items, discount,
+          discountType: discount ? discountType : undefined,
+          tags: tags.length > 0 ? tags : undefined, receiptDate,
+        });
+      } else {
+        const sharesEntries = Object.entries(memberShares) as [string, number][];
+        const distributed = distributeByShares(totalAmount, sharesEntries, 2);
+        const splits = sharesEntries.map(([memberId, share]) => {
+          const amount = distributed.get(memberId) ?? 0;
+          const isAutoSignOff = memberId === paidBy || memberId === currentUser.id;
+          return {
+            memberId, value: share, amount,
+            signedOff: isAutoSignOff,
+            signedAt: isAutoSignOff ? new Date().toISOString() : undefined,
+          };
+        });
+        await createExpense({
+          description: description.trim(), amount: totalAmount, paidBy,
+          createdBy: currentUser.id, splitType: 'shares', splits,
+          tags: tags.length > 0 ? tags : undefined, receiptDate,
+        });
+      }
       navigate('/expenses');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create expense');
@@ -262,24 +356,23 @@ export function AddExpense() {
     }
   };
 
-  const hasItems = items.length > 0;
-
   return (
     <div className="pb-20">
       <h2 className="text-xl font-bold mb-6">Add Transaction</h2>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Receipt capture - always show */}
-        <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">
-            Scan Receipt (optional)
-          </label>
-          <ReceiptCapture
-            onProcessed={handleReceiptProcessed}
-            onError={handleReceiptError}
-            disabled={hasItems}
-          />
-        </div>
+        {splitMode === 'items' && (
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+              Scan Receipt (optional)
+            </label>
+            <ReceiptCapture
+              onProcessed={handleReceiptProcessed}
+              onError={handleReceiptError}
+              disabled={hasItems}
+            />
+          </div>
+        )}
 
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1">
@@ -294,7 +387,18 @@ export function AddExpense() {
           />
         </div>
 
-        {/* Tags */}
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">
+            Payment date
+          </label>
+          <input
+            type="datetime-local"
+            value={receiptDate ? toLocalDatetimeInput(receiptDate) : ''}
+            onChange={(e) => setReceiptDate(e.target.value ? parseDatetimeLocal(e.target.value) : new Date().toISOString())}
+            className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100"
+          />
+        </div>
+
         <div>
           <label className="block text-sm font-medium text-gray-300 mb-1">
             Tags (optional)
@@ -313,18 +417,25 @@ export function AddExpense() {
                 </button>
               );
             })}
-            <div className="flex items-center gap-1">
+            <div ref={dropdownRef} className="relative flex items-center gap-1">
               <input
                 type="text"
                 value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setTagInput(value);
+                  setShowSuggestions(value.trim().length >= 1);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
                     if (tagInput.trim() && !tags.includes(tagInput.trim().toLowerCase())) {
                       setTags([...tags, tagInput.trim().toLowerCase()]);
                       setTagInput('');
+                      setShowSuggestions(false);
                     }
+                  } else if (e.key === 'Escape') {
+                    setShowSuggestions(false);
                   }
                 }}
                 placeholder="add tag"
@@ -336,12 +447,42 @@ export function AddExpense() {
                   if (tagInput.trim() && !tags.includes(tagInput.trim().toLowerCase())) {
                     setTags([...tags, tagInput.trim().toLowerCase()]);
                     setTagInput('');
+                    setShowSuggestions(false);
                   }
                 }}
                 className="text-sm text-cyan-400 hover:text-cyan-300"
               >
                 +
               </button>
+
+              {showSuggestions && (filteredSuggestions.length > 0 || showCreateOption) && (
+                <div className="absolute top-full left-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 min-w-[200px] max-h-[200px] overflow-y-auto">
+                  {filteredSuggestions.map((tag) => {
+                    const color = getTagColor(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => {
+                          setTags([...tags, tag]);
+                          setTagInput('');
+                          setShowSuggestions(false);
+                        }}
+                        className="w-full px-3 py-2 text-sm text-left hover:bg-gray-700 flex items-center gap-2"
+                      >
+                        <span className={`px-2 py-0.5 rounded-full text-xs ${color.bg} ${color.text}`}>
+                          {tag}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {showCreateOption && (
+                    <div className="px-3 py-2 text-sm text-gray-500 italic">
+                      Press Enter to add "{tagInput.trim()}"
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -364,7 +505,6 @@ export function AddExpense() {
           </select>
         </div>
 
-        {/* Split between - draggable members */}
         <div>
           <div className="flex justify-between items-center mb-2">
             <label className="block text-sm font-medium text-gray-300">
@@ -380,6 +520,7 @@ export function AddExpense() {
               </button>
             )}
           </div>
+
           <div className="flex flex-wrap gap-2">
             {group.members.map((member) => {
               const isIncluded = includedMemberIds.has(member.id);
@@ -396,89 +537,212 @@ export function AddExpense() {
                       : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                   }`}
                 >
-                  {isYou ? <span className="text-yellow-400">[{member.name}]</span> : member.name}
+                  {member.name}{isYou && <> <YouBadge /></>}
                 </div>
               );
             })}
           </div>
           <p className="text-xs text-gray-500 mt-2">
-            Drag to items or "+ Add item" below
+            {splitMode === 'items'
+              ? 'Drag to items or "+ Add item" below'
+              : 'Tap to add/remove from expense'}
           </p>
         </div>
 
-        {/* Discount - show when items exist */}
-        {hasItems && (
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Discount %
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="1"
-                value={discount || ''}
-                onChange={(e) => {
-                  const value = e.target.value ? parseFloat(e.target.value) : undefined;
-                  handleDiscountChange(value && value > 0 && value <= 100 ? value : undefined);
-                }}
-                placeholder="0"
-                className="w-24 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100"
-              />
-              <span className="text-gray-400 text-sm">
-                {discount ? `${discount}% off all items` : 'No discount'}
-              </span>
-              {discount && (
-                <button
-                  type="button"
-                  onClick={() => handleDiscountChange(undefined)}
-                  className="text-red-400 hover:text-red-300 text-sm"
-                >
-                  Remove
-                </button>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Amounts section */}
+        {/* Total + Discount (same row) */}
         <div>
-          <div className="flex justify-between items-center mb-2">
-            <label className="block text-sm font-medium text-gray-300">
-              Amounts
-            </label>
-            {includedMemberIds.size > 0 && (
+          <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+            <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Total</span>
+            <input
+              type="number"
+              min="0"
+              value={totalAmount || ''}
+              onChange={(e) => {
+                if (splitMode === 'shares') {
+                  setHasManualTotal(true);
+                  const parsed = parseFloat(e.target.value);
+                  if (!isNaN(parsed) && parsed >= 0) {
+                    setTotalAmount(parsed);
+                  } else if (e.target.value === '' || e.target.value === '0') {
+                    setTotalAmount(0);
+                  }
+                } else {
+                  handleTotalChange(e.target.value);
+                }
+              }}
+              placeholder="0"
+              className="flex-1 min-w-0 bg-transparent px-3 py-2 text-right text-lg font-semibold text-gray-100"
+            />
+            <span className="px-2 py-2 text-sm text-gray-500">K</span>
+          </div>
+          <div className="flex justify-between items-center mt-1">
+            <p className="text-xs text-gray-500">
+              {discount
+                ? `Amount paid · Original: ${billGoc.toLocaleString()}${group.currency}`
+                : 'Amount paid'}
+            </p>
+            {splitMode === 'items' && totalAmount > 0 && !showDiscountInput && !discount && (
               <button
                 type="button"
-                onClick={() => {
-                  // Split total equally among all existing items
-                  if (items.length === 0) return;
-                  const splitAmount = roundNumber(totalAmount / items.length, 2);
-                  const newItems = items.map(item => ({
-                    ...item,
-                    amount: splitAmount,
-                  }));
-                  handleItemsChange(newItems);
-                }}
-                className="text-sm text-cyan-400 hover:text-cyan-300"
+                onClick={() => setShowDiscountInput(true)}
+                className="text-xs text-cyan-500 hover:text-cyan-400"
               >
-                Split equally
+                + Add discount
               </button>
             )}
           </div>
-          <ReceiptItems
-            items={items}
-            members={group.members}
-            currency={group.currency}
-            totalAmount={totalAmount}
-            onTotalChange={handleTotalChange}
-            onChange={handleItemsChange}
-            payerId={paidBy}
-            selectedItemId={selectedItemId}
-            onItemSelect={handleItemSelect}
-          />
+          {splitMode === 'items' && totalAmount > 0 && (showDiscountInput || discount) && (
+            <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden mt-2">
+              <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Discount</span>
+              <input
+                type="number"
+                min="0"
+                autoFocus
+                value={discount || ''}
+                onChange={(e) => {
+                  const raw = e.target.value ? parseFloat(e.target.value) : undefined;
+                  if (discountType === 'flat') {
+                    setDiscount(raw && raw > 0 ? raw : undefined);
+                  } else {
+                    setDiscount(raw && raw > 0 && raw <= 100 ? raw : undefined);
+                  }
+                }}
+                placeholder="0"
+                className="flex-1 bg-transparent px-3 py-2 text-right text-sm text-gray-100"
+              />
+              <select
+                value={discountType}
+                onChange={(e) => setDiscountType(e.target.value as DiscountType)}
+                className="bg-gray-800 border-l border-gray-700 px-2 py-2 text-gray-100 text-sm"
+              >
+                <option value="percentage">%</option>
+                <option value="flat">K</option>
+              </select>
+              <button
+                type="button"
+                onClick={() => { setDiscount(undefined); setShowDiscountInput(false); }}
+                className="px-2 py-2 text-gray-600 hover:text-red-400 text-sm"
+              >
+                ×
+              </button>
+            </div>
+          )}
         </div>
+
+        {/* Split mode toggle */}
+        <div className="flex bg-gray-800 rounded-lg p-0.5">
+          <button
+            type="button"
+            onClick={() => handleSplitModeChange('items')}
+            className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
+              splitMode === 'items'
+                ? 'bg-cyan-600 text-white font-semibold'
+                : 'text-gray-500'
+            }`}
+          >
+            Items
+          </button>
+          <button
+            type="button"
+            onClick={() => handleSplitModeChange('shares')}
+            className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
+              splitMode === 'shares'
+                ? 'bg-cyan-600 text-white font-semibold'
+                : 'text-gray-500'
+            }`}
+          >
+            Shares
+          </button>
+        </div>
+
+        {/* Split details */}
+        {splitMode === 'items' ? (
+          <div>
+            <div className="flex justify-between items-center mb-2">
+              <label className="block text-sm font-medium text-gray-300">Amounts</label>
+              {includedMemberIds.size > 0 && (
+                <button type="button" onClick={() => {
+                  if (items.length === 0) return;
+                  const rawTotal = items.reduce((sum, i) => sum + i.amount, 0);
+                  const splitAmount = roundNumber(rawTotal / items.length, 2);
+                  handleItemsChange(items.map(item => ({ ...item, amount: splitAmount })));
+                }} className="text-sm text-cyan-400 hover:text-cyan-300">Split equally</button>
+              )}
+            </div>
+            <ReceiptItems
+              items={items}
+              members={group.members}
+              currency={group.currency}
+              discountAmount={discountAmount}
+              billGoc={billGoc}
+              onChange={handleItemsChange}
+              payerId={paidBy}
+              selectedItemId={selectedItemId}
+              onItemSelect={handleItemSelect}
+            />
+            {hasManualTotal && items.length > 0 && (() => {
+              const itemsSum = roundNumber(items.reduce((sum, i) => sum + i.amount, 0), 2);
+              const diff = roundNumber(itemsSum - billGoc, 2);
+              if (Math.abs(diff) < 0.01) return null;
+              return (
+                <p className="text-xs text-yellow-400 mt-1">
+                  Items: {itemsSum.toLocaleString()}{group.currency} · Expected: {billGoc.toLocaleString()}{group.currency} (diff {diff > 0 ? '+' : ''}{diff}{group.currency})
+                </p>
+              );
+            })()}
+          </div>
+        ) : (
+          <div>
+            <div className="flex justify-between items-center mb-2">
+              <label className="block text-sm font-medium text-gray-300">Shares</label>
+              <span className="text-sm text-gray-500 italic">
+                {allSharesEqual ? 'All equal' : `Total: ${totalShares} shares`}
+              </span>
+            </div>
+
+            <div className="space-y-1">
+              {Object.entries(memberShares).map(([memberId, share]) => {
+                const member = group.members.find(m => m.id === memberId);
+                if (!member) return null;
+                const isYou = currentUser && memberId === currentUser.id;
+                const percentage = totalShares > 0 ? roundNumber((share / totalShares) * 100) : 0;
+                const memberAmount = totalShares > 0 ? roundNumber(totalAmount * share / totalShares, 2) : 0;
+
+                return (
+                  <div key={memberId} className="flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
+                    <div>
+                      <span className="text-sm text-gray-100">
+                        {member.name}{isYou && <> <YouBadge /></>}
+                      </span>
+                      <span className="text-xs text-gray-500 ml-2">{share}/{totalShares} · {percentage}%</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-green-400 font-medium">{memberAmount.toLocaleString()}{group.currency}</span>
+                      <div className="flex items-center gap-1">
+                        <button type="button" disabled={share <= 1}
+                          onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: Math.max(1, prev[memberId] - 1) }))}
+                          className="w-7 h-7 flex items-center justify-center bg-gray-700 rounded-md text-white disabled:opacity-40">−</button>
+                        <span className="text-lg font-bold text-white min-w-[22px] text-center">{share}</span>
+                        <button type="button"
+                          onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: prev[memberId] + 1 }))}
+                          className="w-7 h-7 flex items-center justify-center bg-cyan-600 rounded-md text-white">+</button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {totalAmount > 0 && (
+              <div className="mt-3 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
+                <div className="flex justify-between text-sm font-semibold">
+                  <span className="text-gray-300">Total to split</span>
+                  <span className="text-white">{totalAmount.toLocaleString()}{group.currency}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {error && (
           <div className="bg-red-900/30 border border-red-700 text-red-300 px-4 py-3 rounded-lg">
@@ -488,12 +752,22 @@ export function AddExpense() {
 
         <button
           type="submit"
-          disabled={submitting || items.length === 0}
+          disabled={submitting || (splitMode === 'items' ? items.length === 0 : Object.keys(memberShares).length === 0 || totalAmount <= 0)}
           className="w-full bg-cyan-600 text-white py-3 rounded-lg font-medium hover:bg-cyan-700 disabled:opacity-50"
         >
           {submitting ? 'Adding...' : 'Add Transaction'}
         </button>
       </form>
+
+      <ConfirmDialog
+        open={pendingModeSwitch !== null}
+        title={pendingModeSwitch === 'shares' ? 'Switch to Shares' : 'Switch to Items'}
+        message={pendingModeSwitch === 'shares' ? 'Your items will be cleared. This cannot be undone.' : 'Your shares will be cleared. This cannot be undone.'}
+        confirmLabel="Clear & Switch"
+        destructive
+        onConfirm={() => pendingModeSwitch && executeModeSwitch(pendingModeSwitch)}
+        onCancel={() => setPendingModeSwitch(null)}
+      />
     </div>
   );
 }

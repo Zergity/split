@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { calculateBalances, formatCurrency, formatRelativeTime } from '../utils/balances';
+import { YouBadge } from '../components/YouBadge';
 
 export function Dashboard() {
   const { group, expenses, currentUser } = useApp();
@@ -121,30 +122,28 @@ export function Dashboard() {
           <div className="grid grid-cols-2 gap-4">
             <Link
               to="/pending"
-              className="bg-gray-800 rounded-lg shadow-sm border border-gray-700 p-4 text-center hover:border-cyan-500"
+              className="bg-gray-800 rounded-lg shadow-sm border border-gray-700 p-4 text-center hover:border-cyan-500 flex flex-col items-center gap-1"
             >
-              <p className="text-2xl font-bold text-cyan-400">
-                {pendingForUser.length}
-              </p>
+              <svg className="w-5 h-5 text-cyan-500 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+              </svg>
+              <p className="text-2xl font-bold text-cyan-400">{pendingForUser.length}</p>
               <p className="text-sm text-gray-400">To accept</p>
               {toSignOffAmount > 0 && (
-                <p className="text-xs text-red-400 mt-1">
-                  {formatCurrency(toSignOffAmount, group.currency)}
-                </p>
+                <p className="text-xs text-red-400">{formatCurrency(toSignOffAmount, group.currency)}</p>
               )}
             </Link>
             <Link
               to="/pending"
-              className="bg-gray-800 rounded-lg shadow-sm border border-gray-700 p-4 text-center hover:border-cyan-500"
+              className="bg-gray-800 rounded-lg shadow-sm border border-gray-700 p-4 text-center hover:border-orange-500 flex flex-col items-center gap-1"
             >
-              <p className="text-2xl font-bold text-orange-400">
-                {waitingForOthers.length}
-              </p>
+              <svg className="w-5 h-5 text-orange-400 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <p className="text-2xl font-bold text-orange-400">{waitingForOthers.length}</p>
               <p className="text-sm text-gray-400">Awaiting others</p>
               {awaitingOthersAmount > 0 && (
-                <p className="text-xs text-green-400 mt-1">
-                  {formatCurrency(awaitingOthersAmount, group.currency)}
-                </p>
+                <p className="text-xs text-green-400">{formatCurrency(awaitingOthersAmount, group.currency)}</p>
               )}
             </Link>
           </div>
@@ -185,10 +184,11 @@ export function Dashboard() {
                   >
                     <div>
                       <p className="font-medium">{expense.description}</p>
-                      <p className="text-gray-400 text-xs">
-                        by {currentUser && payer?.id === currentUser.id ? (
-                          <span className="text-yellow-400">[{payer?.name || 'Unknown'}]</span>
-                        ) : (payer?.name || 'Unknown')}
+                      <p className="text-gray-400 text-xs flex items-center gap-1 flex-wrap">
+                        by <span className="text-gray-200">{payer?.name || 'Unknown'}</span>
+                        {currentUser && payer?.id === currentUser.id && (
+                          <YouBadge />
+                        )}
                         <span className="mx-1">•</span>
                         {formatRelativeTime(expense.createdAt)}
                       </p>

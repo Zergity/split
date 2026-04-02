@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { MemberBalance, Settlement } from '../types';
 import { formatCurrency } from '../utils/balances';
+import { YouBadge } from './YouBadge';
 
 interface BalanceCardProps {
   balance: MemberBalance;
@@ -28,10 +29,11 @@ export function BalanceCard({
       }`}
     >
       <div className="flex justify-between items-center">
-        <span className="font-medium">
-          {isCurrentUser ? (
-            <span className="text-yellow-400">[{balance.memberName}]</span>
-          ) : balance.memberName}
+        <span className="font-medium flex items-center gap-1.5">
+          {balance.memberName}
+          {isCurrentUser && (
+            <YouBadge />
+          )}
         </span>
         <div className="flex items-center gap-3">
           <span className="font-semibold">

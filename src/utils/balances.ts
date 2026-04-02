@@ -1,4 +1,4 @@
-import { Expense, Member, MemberBalance, Settlement } from '../types';
+import { Expense, Member, MemberBalance, Settlement, DiscountType } from '../types';
 
 // Check if an expense is soft-deleted
 export function isDeleted(expense: Expense): boolean {
@@ -221,4 +221,94 @@ export function getTagColor(tag: string): { bg: string; text: string; hoverBg: s
   }
   const index = Math.abs(hash) % TAG_COLORS.length;
   return TAG_COLORS[index];
+}
+
+/** Convert an ISO string to a datetime-local input value */
+export function toLocalDatetimeInput(iso: string): string {
+  const d = new Date(iso);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+
+/** Safely parse a datetime-local input value to an ISO string */
+export function parseDatetimeLocal(value: string): string {
+  // datetime-local gives "YYYY-MM-DDTHH:mm" — treat as local time
+  const parts = value.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (parts) {
+    const d = new Date(+parts[1], +parts[2] - 1, +parts[3], +parts[4], +parts[5]);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  // Fallback: try native parsing
+  const d = new Date(value);
+  if (!isNaN(d.getTime())) return d.toISOString();
+  return new Date().toISOString();
+}
+
+export function calculateDiscountAmount(
+  discount: number | undefined,
+  discountType: DiscountType | undefined,
+  subtotal: number
+): number {
+  if (!discount || discount <= 0 || subtotal <= 0) return 0;
+  if (discountType === 'flat') return Math.min(discount, subtotal);
+  const pct = discount / 100;
+  if (pct >= 1) return 0;
+  return roundNumber(subtotal * pct, 2);
+}
+
+/**
+ * Calculate the pre-discount subtotal (billGoc) from the post-discount total.
+ * For percentage: subtotal = total / (1 - pct/100)
+ * For flat: subtotal = total + discount
+ */
+export function calculateBillGoc(
+  total: number,
+  discount: number | undefined,
+  discountType: DiscountType | undefined
+): number {
+  if (!discount || discount <= 0) return total;
+  if (discountType === 'flat') return roundNumber(total + discount, 2);
+  const pct = discount / 100;
+  if (pct >= 1) return total;
+  return roundNumber(total / (1 - pct), 2);
+}
+
+/**
+ * Distribute a total amount across shares using largest-remainder method,
+ * ensuring the split amounts sum exactly to the total.
+ */
+export function distributeByShares(
+  total: number,
+  shares: [string, number][],
+  decimals: number = 2
+): Map<string, number> {
+  const result = new Map<string, number>();
+  const totalShares = shares.reduce((sum, [, s]) => sum + s, 0);
+  if (totalShares === 0) return result;
+
+  const factor = Math.pow(10, decimals);
+  const totalCents = Math.round(total * factor);
+
+  let allocated = 0;
+  const entries: { id: string; floored: number; remainder: number }[] = [];
+
+  for (const [id, share] of shares) {
+    const exact = (totalCents * share) / totalShares;
+    const floored = Math.floor(exact);
+    entries.push({ id, floored, remainder: exact - floored });
+    allocated += floored;
+  }
+
+  // Distribute remaining cents to entries with largest remainders
+  let remaining = totalCents - allocated;
+  entries.sort((a, b) => b.remainder - a.remainder);
+  for (const entry of entries) {
+    if (remaining <= 0) break;
+    entry.floored += 1;
+    remaining -= 1;
+  }
+
+  for (const entry of entries) {
+    result.set(entry.id, entry.floored / factor);
+  }
+  return result;
 }

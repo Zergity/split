@@ -10,6 +10,7 @@ export function Expenses() {
   const [searchParams] = useSearchParams();
   const expandId = searchParams.get('expand');
   const [filter, setFilter] = useState<'all' | 'mine' | 'deleted'>('all');
+  const [sortBy, setSortBy] = useState<'payment' | 'created'>('payment');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
@@ -61,8 +62,11 @@ export function Expenses() {
     );
   }
 
+  const getDateForSort = (e: Expense) =>
+    sortBy === 'payment' ? (e.receiptDate ?? e.createdAt) : e.createdAt;
+
   const sortedExpenses = [...filteredExpenses].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    (a, b) => new Date(getDateForSort(b)).getTime() - new Date(getDateForSort(a)).getTime()
   );
 
   // Group expenses by day
@@ -72,7 +76,7 @@ export function Expenses() {
     let currentGroup: Expense[] = [];
 
     sortedExpenses.forEach((expense) => {
-      const dateKey = getDateKey(expense.createdAt);
+      const dateKey = getDateKey(getDateForSort(expense));
       if (dateKey !== currentDateKey) {
         if (currentGroup.length > 0) {
           groups.push({ dateKey: currentDateKey, expenses: currentGroup });
@@ -114,7 +118,7 @@ export function Expenses() {
     const rows: string[][] = [];
 
     sortedExpenses.forEach((expense) => {
-      const date = new Date(expense.createdAt).toISOString().split('T')[0];
+      const date = new Date(getDateForSort(expense)).toISOString().split('T')[0];
       const payer = getMemberName(expense.paidBy, group.members);
       const tags = expense.tags?.join(', ') || '';
 
@@ -200,36 +204,44 @@ export function Expenses() {
       </div>
 
       {currentUser && (
-        <div className="flex gap-2 mb-4">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex gap-2">
+            <button
+              onClick={() => setFilter('all')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                filter === 'all'
+                  ? 'bg-cyan-600 text-white'
+                  : 'bg-gray-700 text-gray-300'
+              }`}
+            >
+              All
+            </button>
+            <button
+              onClick={() => setFilter('mine')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                filter === 'mine'
+                  ? 'bg-cyan-600 text-white'
+                  : 'bg-gray-700 text-gray-300'
+              }`}
+            >
+              Yours
+            </button>
+            <button
+              onClick={() => setFilter('deleted')}
+              className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                filter === 'deleted'
+                  ? 'bg-red-600 text-white'
+                  : 'bg-gray-700 text-gray-300'
+              }`}
+            >
+              Trash
+            </button>
+          </div>
           <button
-            onClick={() => setFilter('all')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium ${
-              filter === 'all'
-                ? 'bg-cyan-600 text-white'
-                : 'bg-gray-700 text-gray-300'
-            }`}
+            onClick={() => setSortBy(prev => prev === 'payment' ? 'created' : 'payment')}
+            className="text-xs text-gray-400 hover:text-gray-200"
           >
-            All
-          </button>
-          <button
-            onClick={() => setFilter('mine')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium ${
-              filter === 'mine'
-                ? 'bg-cyan-600 text-white'
-                : 'bg-gray-700 text-gray-300'
-            }`}
-          >
-            Yours
-          </button>
-          <button
-            onClick={() => setFilter('deleted')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium ${
-              filter === 'deleted'
-                ? 'bg-red-600 text-white'
-                : 'bg-gray-700 text-gray-300'
-            }`}
-          >
-            Trash
+            {sortBy === 'payment' ? 'Paid' : 'Added'} ↓
           </button>
         </div>
       )}

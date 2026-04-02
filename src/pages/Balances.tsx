@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { BalanceCard } from '../components/BalanceCard';
 import { calculateBalances, calculateSettlements, formatCurrency } from '../utils/balances';
+import { YouBadge } from '../components/YouBadge';
 
 export function Balances() {
   const { group, expenses, currentUser } = useApp();
@@ -86,20 +87,18 @@ export function Balances() {
                     className="bg-gray-800 rounded-lg border border-gray-700 p-3 flex items-center justify-between gap-2"
                   >
                     <div className="flex items-center gap-2 min-w-0">
-                      <span
-                        className={`font-medium truncate ${
-                          settlement.from === currentUser?.id ? 'text-yellow-400' : ''
-                        }`}
-                      >
-                        {settlement.from === currentUser?.id ? `[${settlement.fromName}]` : settlement.fromName}
+                      <span className="font-medium truncate flex items-center gap-1">
+                        {settlement.fromName}
+                        {settlement.from === currentUser?.id && (
+                          <YouBadge />
+                        )}
                       </span>
                       <span className="text-gray-500 flex-shrink-0">→</span>
-                      <span
-                        className={`font-medium truncate ${
-                          settlement.to === currentUser?.id ? 'text-yellow-400' : ''
-                        }`}
-                      >
-                        {settlement.to === currentUser?.id ? `[${settlement.toName}]` : settlement.toName}
+                      <span className="font-medium truncate flex items-center gap-1">
+                        {settlement.toName}
+                        {settlement.to === currentUser?.id && (
+                          <YouBadge />
+                        )}
                       </span>
                     </div>
                     <div className="flex items-center gap-3 flex-shrink-0">

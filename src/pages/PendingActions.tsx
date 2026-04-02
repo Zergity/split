@@ -106,8 +106,11 @@ export function PendingActions() {
               onClick={async () => {
                 setSigningAll(true);
                 try {
-                  for (const expense of toSignOff) {
-                    await signOffExpense(expense);
+                  const results = await Promise.allSettled(toSignOff.map((expense) => signOffExpense(expense)));
+                  const failed = results.filter(r => r.status === 'rejected').length;
+                  if (failed > 0) {
+                    // Some succeeded, some failed — UI will refresh from context
+                    console.warn(`${failed} of ${results.length} sign-offs failed`);
                   }
                 } finally {
                   setSigningAll(false);
@@ -116,7 +119,7 @@ export function PendingActions() {
               disabled={signingAll}
               className="px-4 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 disabled:opacity-50"
             >
-              {signingAll ? 'Accepting...' : 'Accept All'}
+              {signingAll ? 'Accepting...' : `Accept All (${toSignOff.length})`}
             </button>
           )}
         </div>
