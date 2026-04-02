@@ -247,8 +247,8 @@ export function NotificationBell() {
       </button>
 
       {open && (
-        <div className="fixed right-2 left-2 sm:left-auto sm:right-2 sm:w-80 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 flex flex-col overflow-hidden"
-          style={{ top: '64px', maxHeight: 'calc(100dvh - 80px)' }}>
+        <div className="fixed right-2 left-2 sm:left-auto sm:right-2 sm:w-80 top-16 bg-gray-800 border border-gray-700 rounded-lg shadow-xl z-50 flex flex-col overflow-hidden"
+          style={{ maxHeight: 'calc(100vh - 5rem)' }}>
 
           {/* Sliding panels wrapper */}
           <div

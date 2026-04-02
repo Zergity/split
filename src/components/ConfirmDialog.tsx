@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useRef } from 'react';
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -21,11 +21,33 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const cancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      cancelRef.current?.focus();
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onCancel();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [open, onCancel]);
+
   if (!open) return null;
 
   return (
     <div
       className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="confirm-dialog-title"
       onClick={onCancel}
     >
       <div
@@ -33,11 +55,12 @@ export function ConfirmDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div>
-          <h3 className="font-semibold text-gray-100 text-base">{title}</h3>
+          <h3 id="confirm-dialog-title" className="font-semibold text-gray-100 text-base">{title}</h3>
           <p className="text-sm text-gray-400 mt-1">{message}</p>
         </div>
         <div className="flex gap-3">
           <button
+            ref={cancelRef}
             onClick={onCancel}
             className="flex-1 py-2.5 rounded-lg border border-gray-600 text-gray-300 text-sm font-medium hover:bg-gray-700"
           >

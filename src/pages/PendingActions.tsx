@@ -106,7 +106,12 @@ export function PendingActions() {
               onClick={async () => {
                 setSigningAll(true);
                 try {
-                  await Promise.all(toSignOff.map((expense) => signOffExpense(expense)));
+                  const results = await Promise.allSettled(toSignOff.map((expense) => signOffExpense(expense)));
+                  const failed = results.filter(r => r.status === 'rejected').length;
+                  if (failed > 0) {
+                    // Some succeeded, some failed — UI will refresh from context
+                    console.warn(`${failed} of ${results.length} sign-offs failed`);
+                  }
                 } finally {
                   setSigningAll(false);
                 }

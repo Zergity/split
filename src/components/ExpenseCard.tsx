@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Expense, Member } from '../types';
-import { calculateDiscountAmount, formatCurrency, formatRelativeTime, getTagColor, isDeleted } from '../utils/balances';
+import { calculateBillGoc, calculateDiscountAmount, formatCurrency, formatRelativeTime, getTagColor, isDeleted } from '../utils/balances';
 import { SignOffButton } from './SignOffButton';
 import { useApp } from '../context/AppContext';
 import { ConfirmDialog } from './ConfirmDialog';
+import { YouBadge } from './YouBadge';
 
 interface ExpenseCardProps {
   expense: Expense;
@@ -76,7 +77,7 @@ export function ExpenseCard({
       return (
         <>
           {name}
-          <span className="ml-1 text-[10px] font-semibold uppercase tracking-wide bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded px-1 py-0.5">you</span>
+          <YouBadge />
         </>
       );
     }
@@ -360,7 +361,7 @@ export function ExpenseCard({
                   Split ({expense.splitType === 'shares' ? 'by shares' : expense.splitType})
                   {expense.splitType !== 'shares' && expense.discount && (
                     <span className="ml-1">
-                      · −{formatCurrency(calculateDiscountAmount(expense.discount, expense.discountType, expense.amount), currency)}
+                      · −{formatCurrency(calculateDiscountAmount(expense.discount, expense.discountType, calculateBillGoc(expense.amount, expense.discount, expense.discountType)), currency)}
                     </span>
                   )}
                 </p>

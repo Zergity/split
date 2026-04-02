@@ -4,12 +4,8 @@ import { useApp } from '../context/AppContext';
 import { ReceiptItems } from '../components/ReceiptItems';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ReceiptItem, DiscountType } from '../types';
-import { roundNumber, calculateDiscountAmount, calculateBillGoc } from '../utils/balances';
-
-function toLocalDatetimeInput(iso: string): string {
-  const d = new Date(iso);
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-}
+import { roundNumber, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal } from '../utils/balances';
+import { YouBadge } from '../components/YouBadge';
 
 export function EditExpense() {
   const navigate = useNavigate();
@@ -87,14 +83,8 @@ export function EditExpense() {
 
   const discountAmount = useMemo(() => {
     if (splitMode !== 'items') return 0;
-    if (items.length > 0) {
-      const bg = items.reduce((sum, item) => sum + item.amount, 0);
-      if (!discount || discount <= 0) return 0;
-      if (discountType === 'flat') return discount;
-      return roundNumber(bg * (discount / 100), 2);
-    }
-    return calculateDiscountAmount(discount, discountType, totalAmount);
-  }, [items, totalAmount, discount, discountType, splitMode]);
+    return calculateDiscountAmount(discount, discountType, billGoc);
+  }, [billGoc, discount, discountType, splitMode]);
 
   const totalShares = Object.values(memberShares).reduce((sum, s) => sum + s, 0);
   const allSharesEqual = totalShares > 0 && Object.values(memberShares).every(s => s === 1);
@@ -282,9 +272,12 @@ export function EditExpense() {
         setError('Add at least one item');
         return;
       }
-      if (discountType === 'flat' && discount && discount >= totalAmount) {
-        setError('Flat discount must be less than total amount');
-        return;
+      if (discountType === 'flat' && discount) {
+        const bg = items.reduce((sum, i) => sum + i.amount, 0);
+        if (discount >= bg) {
+          setError('Flat discount must be less than items subtotal');
+          return;
+        }
       }
     } else {
       if (totalAmount <= 0) {
@@ -352,8 +345,10 @@ export function EditExpense() {
       } else {
         const oldSplitsMap = new Map(expense.splits.map((s) => [s.memberId, s]));
 
-        const splits = Object.entries(memberShares).map(([memberId, share]) => {
-          const amount = roundNumber(totalAmount * share / totalShares, 2);
+        const sharesEntries = Object.entries(memberShares) as [string, number][];
+        const distributed = distributeByShares(totalAmount, sharesEntries, 2);
+        const splits = sharesEntries.map(([memberId, share]) => {
+          const amount = distributed.get(memberId) ?? 0;
           const oldSplit = oldSplitsMap.get(memberId);
 
           if (memberId === paidBy) {
@@ -449,7 +444,7 @@ export function EditExpense() {
           <input
             type="datetime-local"
             value={receiptDate ? toLocalDatetimeInput(receiptDate) : ''}
-            onChange={(e) => setReceiptDate(e.target.value ? new Date(e.target.value).toISOString() : expense?.createdAt ?? '')}
+            onChange={(e) => setReceiptDate(e.target.value ? parseDatetimeLocal(e.target.value) : expense?.createdAt ?? '')}
             disabled={canOnlyAssign || canOnlyEditOwnItems}
             className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100 disabled:opacity-50"
           />
@@ -498,7 +493,7 @@ export function EditExpense() {
                         : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                     }`}
                   >
-                    {isYou ? <span className="text-yellow-400">[{member.name}]</span> : member.name}
+                    {member.name}{isYou && <> <YouBadge /></>}
                   </div>
                 );
               })}
@@ -690,7 +685,7 @@ export function EditExpense() {
                   <div key={memberId} className="flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
                     <div>
                       <span className="text-sm text-gray-100">
-                        {isYou ? <span className="text-yellow-400">[{member.name}]</span> : member.name}
+                        {member.name}{isYou && <> <YouBadge /></>}
                       </span>
                       <span className="text-xs text-gray-500 ml-2">{share}/{totalShares} · {percentage}%</span>
                     </div>

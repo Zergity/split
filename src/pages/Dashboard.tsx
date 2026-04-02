@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { calculateBalances, formatCurrency, formatRelativeTime } from '../utils/balances';
+import { YouBadge } from '../components/YouBadge';
 
 export function Dashboard() {
   const { group, expenses, currentUser } = useApp();
@@ -186,7 +187,7 @@ export function Dashboard() {
                       <p className="text-gray-400 text-xs flex items-center gap-1 flex-wrap">
                         by <span className="text-gray-200">{payer?.name || 'Unknown'}</span>
                         {currentUser && payer?.id === currentUser.id && (
-                          <span className="text-[10px] font-semibold uppercase tracking-wide bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded px-1 py-0.5">you</span>
+                          <YouBadge />
                         )}
                         <span className="mx-1">•</span>
                         {formatRelativeTime(expense.createdAt)}

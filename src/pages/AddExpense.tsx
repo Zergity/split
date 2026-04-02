@@ -5,12 +5,8 @@ import { ReceiptCapture } from '../components/ReceiptCapture';
 import { ReceiptItems } from '../components/ReceiptItems';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ReceiptItem, ReceiptOCRResult, DiscountType } from '../types';
-import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc } from '../utils/balances';
-
-function toLocalDatetimeInput(iso: string): string {
-  const d = new Date(iso);
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-}
+import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal } from '../utils/balances';
+import { YouBadge } from '../components/YouBadge';
 
 export function AddExpense() {
   const navigate = useNavigate();
@@ -70,7 +66,7 @@ export function AddExpense() {
     return tagSuggestions.filter(tag => tag.startsWith(input) && !tags.includes(tag));
   }, [tagInput, tagSuggestions, tags]);
 
-  const showCreateOption = tagInput.trim() && filteredSuggestions.length === 0;
+  const showCreateOption = tagInput.trim() && filteredSuggestions.length === 0 && !tags.includes(tagInput.trim().toLowerCase());
 
   const hasItems = items.length > 0;
 
@@ -88,15 +84,9 @@ export function AddExpense() {
 
   const discountAmount = useMemo(() => {
     if (splitMode !== 'items') return 0;
-    if (hasManualTotal) return calculateDiscountAmount(discount, discountType, totalAmount);
-    if (items.length > 0) {
-      const bg = items.reduce((sum, item) => sum + item.amount, 0);
-      if (!discount || discount <= 0) return 0;
-      if (discountType === 'flat') return discount;
-      return roundNumber(bg * (discount / 100), 2);
-    }
-    return calculateDiscountAmount(discount, discountType, totalAmount);
-  }, [items, totalAmount, discount, discountType, splitMode, hasManualTotal]);
+    // Always compute discount from the pre-discount subtotal (billGoc)
+    return calculateDiscountAmount(discount, discountType, billGoc);
+  }, [billGoc, discount, discountType, splitMode]);
 
   const includedMemberIds = selectedMemberIds;
 
@@ -220,14 +210,13 @@ export function AddExpense() {
   const handleMemberTap = (memberId: string) => {
     const isIncluded = selectedMemberIds.has(memberId);
 
-    // Toggle selectedMemberIds
-    setSelectedMemberIds(prev => {
-      const next = new Set(prev);
-      if (isIncluded) next.delete(memberId); else next.add(memberId);
-      return next;
-    });
-
     if (splitMode === 'shares') {
+      // Toggle both selectedMemberIds and memberShares together
+      setSelectedMemberIds(prev => {
+        const next = new Set(prev);
+        if (isIncluded) next.delete(memberId); else next.add(memberId);
+        return next;
+      });
       setMemberShares(prev => {
         const next = { ...prev };
         if (isIncluded) delete next[memberId]; else next[memberId] = 1;
@@ -236,15 +225,25 @@ export function AddExpense() {
       return;
     }
 
-    // Items mode: assign to item if a slot is selected or available
+    // Items mode: assign to item if a slot is selected
     if (selectedItemId) {
       handleItemsChange(items.map(item =>
         item.id === selectedItemId ? { ...item, memberId } : item
       ));
+      // Ensure member is in selectedMemberIds when assigning
+      if (!isIncluded) {
+        setSelectedMemberIds(prev => new Set(prev).add(memberId));
+      }
       setSelectedItemId(null);
       return;
     }
 
+    // Toggle: remove member from all items, or add to selectedMemberIds
+    setSelectedMemberIds(prev => {
+      const next = new Set(prev);
+      if (isIncluded) next.delete(memberId); else next.add(memberId);
+      return next;
+    });
     if (isIncluded) {
       handleItemsChange(items.map(item =>
         item.memberId === memberId ? { ...item, memberId: undefined } : item
@@ -274,9 +273,12 @@ export function AddExpense() {
     if (splitMode === 'items') {
       if (totalAmount <= 0) { setError('Total amount must be greater than 0'); return; }
       if (items.length === 0) { setError('Add at least one item'); return; }
-      if (discountType === 'flat' && discount && discount >= totalAmount) {
-        setError('Flat discount must be less than total amount');
-        return;
+      if (discountType === 'flat' && discount) {
+        const bg = items.reduce((sum, i) => sum + i.amount, 0);
+        if (discount >= bg) {
+          setError('Flat discount must be less than items subtotal');
+          return;
+        }
       }
     } else {
       if (totalAmount <= 0) { setError('Total amount must be greater than 0'); return; }
@@ -329,8 +331,10 @@ export function AddExpense() {
           tags: tags.length > 0 ? tags : undefined, receiptDate,
         });
       } else {
-        const splits = Object.entries(memberShares).map(([memberId, share]) => {
-          const amount = roundNumber(totalAmount * share / totalShares, 2);
+        const sharesEntries = Object.entries(memberShares) as [string, number][];
+        const distributed = distributeByShares(totalAmount, sharesEntries, 2);
+        const splits = sharesEntries.map(([memberId, share]) => {
+          const amount = distributed.get(memberId) ?? 0;
           const isAutoSignOff = memberId === paidBy || memberId === currentUser.id;
           return {
             memberId, value: share, amount,
@@ -390,7 +394,7 @@ export function AddExpense() {
           <input
             type="datetime-local"
             value={receiptDate ? toLocalDatetimeInput(receiptDate) : ''}
-            onChange={(e) => setReceiptDate(e.target.value ? new Date(e.target.value).toISOString() : new Date().toISOString())}
+            onChange={(e) => setReceiptDate(e.target.value ? parseDatetimeLocal(e.target.value) : new Date().toISOString())}
             className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-gray-100"
           />
         </div>
@@ -533,7 +537,7 @@ export function AddExpense() {
                       : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
                   }`}
                 >
-                  {isYou ? <span className="text-yellow-400">[{member.name}]</span> : member.name}
+                  {member.name}{isYou && <> <YouBadge /></>}
                 </div>
               );
             })}
@@ -708,7 +712,7 @@ export function AddExpense() {
                   <div key={memberId} className="flex items-center justify-between bg-gray-800 border border-gray-700 rounded-lg px-3 py-2">
                     <div>
                       <span className="text-sm text-gray-100">
-                        {isYou ? <span className="text-yellow-400">[{member.name}]</span> : member.name}
+                        {member.name}{isYou && <> <YouBadge /></>}
                       </span>
                       <span className="text-xs text-gray-500 ml-2">{share}/{totalShares} · {percentage}%</span>
                     </div>

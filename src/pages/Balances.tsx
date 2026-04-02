@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { BalanceCard } from '../components/BalanceCard';
 import { calculateBalances, calculateSettlements, formatCurrency } from '../utils/balances';
+import { YouBadge } from '../components/YouBadge';
 
 export function Balances() {
   const { group, expenses, currentUser } = useApp();
@@ -89,14 +90,14 @@ export function Balances() {
                       <span className="font-medium truncate flex items-center gap-1">
                         {settlement.fromName}
                         {settlement.from === currentUser?.id && (
-                          <span className="text-[10px] font-semibold uppercase tracking-wide bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded px-1 py-0.5 flex-shrink-0">you</span>
+                          <YouBadge />
                         )}
                       </span>
                       <span className="text-gray-500 flex-shrink-0">→</span>
                       <span className="font-medium truncate flex items-center gap-1">
                         {settlement.toName}
                         {settlement.to === currentUser?.id && (
-                          <span className="text-[10px] font-semibold uppercase tracking-wide bg-amber-500/20 text-amber-400 border border-amber-500/30 rounded px-1 py-0.5 flex-shrink-0">you</span>
+                          <YouBadge />
                         )}
                       </span>
                     </div>
