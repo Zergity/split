@@ -26,17 +26,17 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     }
 
     const env = context.env;
-    const { memberId, memberName } = session;
+    const { userId, userName } = session;
 
     // Get existing credentials to exclude them from registration
-    const existingCredentials = await getCredentials(env, memberId);
+    const existingCredentials = await getCredentials(env, userId);
 
     const options = await generateRegistrationOptions({
       rpName: env.RP_NAME || 'Splitter',
       rpID: env.RP_ID || 'localhost',
-      userName: memberName,
-      userID: new TextEncoder().encode(memberId),
-      userDisplayName: memberName,
+      userName,
+      userID: new TextEncoder().encode(userId),
+      userDisplayName: userName,
       attestationType: 'none',
       excludeCredentials: existingCredentials.map(cred => ({
         id: cred.id,
@@ -49,7 +49,7 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     });
 
     // Store challenge for verification
-    await storeChallenge(env, memberId, options.challenge, 'registration');
+    await storeChallenge(env, userId, options.challenge, 'registration');
 
     return Response.json({
       success: true,

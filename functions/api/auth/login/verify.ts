@@ -1,15 +1,13 @@
 import { verifyAuthenticationResponse } from '@simplewebauthn/server';
 import type { AuthEnv } from '../../types/auth';
 import { consumeChallenge } from '../../utils/challenges';
-import { updateCredential, base64ToUint8Array, findCredentialOwner } from '../../utils/credentials';
+import {
+  updateCredential,
+  base64ToUint8Array,
+  findCredentialOwner,
+} from '../../utils/credentials';
 import { createSession, createAuthCookie } from '../../utils/jwt';
-
-// Helper to get member from group data
-async function getMember(env: AuthEnv, memberId: string): Promise<{ id: string; name: string } | null> {
-  const group = await env.SPLITTER_KV.get<{ members: { id: string; name: string }[] }>('group', 'json');
-  if (!group) return null;
-  return group.members.find(m => m.id === memberId) || null;
-}
+import { getUser } from '../../utils/users';
 
 export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
   try {
@@ -24,7 +22,9 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
 
     const env = context.env;
 
-    // Find the credential owner by looking up the credential ID
+    // findCredentialOwner scans credentials:<id> records; in the new schema
+    // those ids are userIds. For legacy data the id is a memberId, which
+    // matches userId by the legacy invariant.
     const credentialData = await findCredentialOwner(env, credential.id);
     if (!credentialData) {
       return Response.json(
@@ -32,18 +32,13 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
         { status: 400 }
       );
     }
+    const userId = credentialData.memberId; // semantic rename: actually userId
+    const storedCredential = credentialData.credential;
 
-    const { memberId, credential: storedCredential } = credentialData;
-
-    // Get and consume the challenge (one-time use)
-    // Challenge was stored with the challenge value as part of the key
-    const expectedChallenge = await consumeChallenge(env, `login:${credential.response.clientDataJSON}`, 'authentication');
-
-    // For discoverable credentials, we stored challenge differently
-    // Let's try to get it by the challenge in the response
+    // Consume the login challenge (keyed by the challenge value itself, since
+    // discoverable credentials don't carry an identifier at challenge time).
     const clientDataJSON = JSON.parse(atob(credential.response.clientDataJSON));
     const challenge = clientDataJSON.challenge;
-
     const validChallenge = await consumeChallenge(env, `login:${challenge}`, 'authentication');
     if (!validChallenge) {
       return Response.json(
@@ -52,11 +47,9 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    // Determine origin from request or env
     const origin = env.RP_ORIGIN || new URL(context.request.url).origin;
     const rpID = env.RP_ID || 'localhost';
 
-    // Verify the authentication response
     const verification = await verifyAuthenticationResponse({
       response: credential,
       expectedChallenge: validChallenge,
@@ -77,33 +70,30 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    // Update the credential counter to prevent replay attacks
-    await updateCredential(env, memberId, storedCredential.id, {
+    await updateCredential(env, userId, storedCredential.id, {
       counter: verification.authenticationInfo.newCounter,
       lastUsedAt: new Date().toISOString(),
     });
 
-    // Get member info
-    const member = await getMember(env, memberId);
-    if (!member) {
+    // Resolve the user (lazy-bootstraps from legacy group if needed).
+    const user = await getUser(env, userId);
+    if (!user) {
       return Response.json(
-        { success: false, error: 'Member not found' },
+        { success: false, error: 'User not found' },
         { status: 400 }
       );
     }
 
-    // Create session
-    const { session, token } = await createSession(env, memberId, member.name);
+    const { session, token } = await createSession(env, user.id, user.name);
 
-    // Set cookie and return response
     return new Response(
       JSON.stringify({
         success: true,
         data: {
           verified: true,
           session: {
-            memberId: session.memberId,
-            memberName: session.memberName,
+            userId: session.userId,
+            userName: session.userName,
             expiresAt: session.expiresAt,
           },
         },

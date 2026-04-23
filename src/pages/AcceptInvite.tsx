@@ -17,7 +17,7 @@ export function AcceptInvite() {
     clearWebAuthnError,
   } = useAuthContext();
 
-  const [memberName, setMemberName] = useState<string | null>(null);
+  const [userName, setMemberName] = useState<string | null>(null);
   const [friendlyName, setFriendlyName] = useState('');
   const [status, setStatus] = useState<'loading' | 'ready' | 'registering' | 'success' | 'error'>('loading');
   const [error, setError] = useState<string | null>(null);
@@ -31,10 +31,10 @@ export function AcceptInvite() {
       return;
     }
 
-    // Check if invite is valid by fetching options (this also returns memberName)
+    // Check if invite is valid by fetching options (this also returns userName)
     authApi.getInvitePasskeyOptions(code)
-      .then(({ memberName }) => {
-        setMemberName(memberName);
+      .then(({ userName }) => {
+        setMemberName(userName);
         setStatus('ready');
       })
       .catch((err) => {
@@ -89,7 +89,7 @@ export function AcceptInvite() {
           <div className="text-4xl mb-4">Done!</div>
           <h2 className="text-xl font-semibold text-green-400 mb-2">You're signed in!</h2>
           <p className="text-gray-400 mb-4">
-            You're now signed in as <span className="text-cyan-400 font-medium">{memberName}</span>.
+            You're now signed in as <span className="text-cyan-400 font-medium">{userName}</span>.
           </p>
           <button
             onClick={() => navigate('/')}
@@ -115,7 +115,7 @@ export function AcceptInvite() {
         {status === 'ready' && mode === 'choose' && (
           <div className="text-center">
             <div className="text-4xl mb-4">+</div>
-            <h2 className="text-xl font-semibold text-gray-100 mb-2">Join as {memberName}</h2>
+            <h2 className="text-xl font-semibold text-gray-100 mb-2">Join as {userName}</h2>
             <p className="text-gray-400 mb-6">
               How would you like to sign in on this device?
             </p>
@@ -164,7 +164,7 @@ export function AcceptInvite() {
             <div className="text-4xl mb-4">*</div>
             <h2 className="text-xl font-semibold text-gray-100 mb-2">Use Existing Passkey</h2>
             <p className="text-gray-400 mb-6">
-              Sign in with a passkey you've already registered for <span className="text-cyan-400 font-medium">{memberName}</span>.
+              Sign in with a passkey you've already registered for <span className="text-cyan-400 font-medium">{userName}</span>.
             </p>
 
             {(error || webAuthnError) && (
@@ -197,7 +197,7 @@ export function AcceptInvite() {
             <div className="text-4xl mb-4">+</div>
             <h2 className="text-xl font-semibold text-gray-100 mb-2">Create New Passkey</h2>
             <p className="text-gray-400 mb-6">
-              Register a new passkey for <span className="text-cyan-400 font-medium">{memberName}</span> on this device.
+              Register a new passkey for <span className="text-cyan-400 font-medium">{userName}</span> on this device.
             </p>
 
             {(error || webAuthnError) && (

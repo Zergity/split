@@ -5,8 +5,8 @@ import { KV_KEYS, SESSION_TTL_SECONDS } from '../types/auth';
 // Create a new session and JWT token
 export async function createSession(
   env: AuthEnv,
-  memberId: string,
-  memberName: string
+  userId: string,
+  userName: string
 ): Promise<{ session: Session; token: string }> {
   const sessionId = crypto.randomUUID();
   const now = Date.now();
@@ -14,8 +14,8 @@ export async function createSession(
 
   const session: Session = {
     sessionId,
-    memberId,
-    memberName,
+    userId,
+    userName,
     createdAt: new Date(now).toISOString(),
     expiresAt,
   };
@@ -31,8 +31,8 @@ export async function createSession(
   const secret = new TextEncoder().encode(env.JWT_SECRET);
   const token = await new jose.SignJWT({
     sessionId,
-    memberId,
-    memberName,
+    userId,
+    userName,
   } as Omit<JWTPayload, 'iat' | 'exp'>)
     .setProtectedHeader({ alg: 'HS256' })
     .setIssuedAt()
@@ -42,7 +42,9 @@ export async function createSession(
   return { session, token };
 }
 
-// Verify JWT token and return payload
+// Verify JWT token and return payload.
+// Normalizes legacy tokens (which carried memberId/memberName) since those
+// may still be in circulation at the time of deploy — legacy invariant: userId === memberId.
 export async function verifyToken(
   env: AuthEnv,
   token: string
@@ -50,19 +52,51 @@ export async function verifyToken(
   try {
     const secret = new TextEncoder().encode(env.JWT_SECRET);
     const { payload } = await jose.jwtVerify(token, secret);
-    return payload as unknown as JWTPayload;
+    const raw = payload as unknown as Record<string, unknown>;
+    const userId = (raw.userId as string | undefined) ?? (raw.memberId as string | undefined);
+    const userName = (raw.userName as string | undefined) ?? (raw.memberName as string | undefined);
+    if (!userId || !userName) return null;
+    return {
+      sessionId: raw.sessionId as string,
+      userId,
+      userName,
+      iat: raw.iat as number,
+      exp: raw.exp as number,
+    };
   } catch {
     return null;
   }
 }
 
-// Get session from KV by session ID
+// Get session from KV by session ID.
+// Normalizes legacy sessions (which carried memberId/memberName) to the new
+// userId/userName shape — legacy invariant: userId === memberId.
 export async function getSession(
   env: AuthEnv,
   sessionId: string
 ): Promise<Session | null> {
-  const data = await env.SPLITTER_KV.get(KV_KEYS.session(sessionId), 'json');
-  return data as Session | null;
+  const data = await env.SPLITTER_KV.get<Session | LegacySession>(
+    KV_KEYS.session(sessionId),
+    'json',
+  );
+  if (!data) return null;
+  if ('userId' in data) return data;
+  return {
+    sessionId: data.sessionId,
+    userId: data.memberId,
+    userName: data.memberName,
+    createdAt: data.createdAt,
+    expiresAt: data.expiresAt,
+  };
+}
+
+// Legacy shape kept local to this file for one-way normalization on read.
+interface LegacySession {
+  sessionId: string;
+  memberId: string;
+  memberName: string;
+  createdAt: string;
+  expiresAt: string;
 }
 
 // Delete session (logout)

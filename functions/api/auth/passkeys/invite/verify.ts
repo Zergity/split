@@ -95,9 +95,8 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     }
 
     const { registrationInfo } = verification;
-    const { memberId, memberName } = invite;
+    const { userId, userName } = invite;
 
-    // Store the credential
     const storedCredential: StoredCredential = {
       id: credential.id,
       publicKey: registrationInfo.credential.publicKey,
@@ -109,23 +108,20 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       friendlyName: friendlyName || getDefaultFriendlyName(context.request),
     };
 
-    await addCredential(env, memberId, storedCredential);
+    await addCredential(env, userId, storedCredential);
 
-    // Delete the invite (one-time use)
     await env.SPLITTER_KV.delete(KV_KEYS.invite(inviteCode));
 
-    // Create a session for the new device
-    const { session, token } = await createSession(env, memberId, memberName);
+    const { session, token } = await createSession(env, userId, userName);
 
-    // Set cookie and return response
     return new Response(
       JSON.stringify({
         success: true,
         data: {
           verified: true,
           session: {
-            memberId: session.memberId,
-            memberName: session.memberName,
+            userId: session.userId,
+            userName: session.userName,
             expiresAt: session.expiresAt,
           },
         },

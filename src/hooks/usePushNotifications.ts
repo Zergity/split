@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { getActiveGroupId } from '../api/client';
 
 interface UsePushNotificationsReturn {
   isSupported: boolean;
@@ -77,11 +78,16 @@ export function usePushNotifications(): UsePushNotificationsReturn {
         applicationServerKey: urlBase64ToUint8Array(vapidPublicKey).buffer as ArrayBuffer,
       });
 
-      // Send subscription to server
+      // Send subscription to server, scoped to the active group. The user
+      // resubscribes per group — each group has its own preferences and
+      // notification history.
       const subJson = subscription.toJSON();
       await fetch('/api/push/subscribe', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Group-Id': getActiveGroupId(),
+        },
         credentials: 'include',
         body: JSON.stringify({
           subscription: {
@@ -107,7 +113,10 @@ export function usePushNotifications(): UsePushNotificationsReturn {
       if (subscription) {
         await fetch('/api/push/subscribe', {
           method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Group-Id': getActiveGroupId(),
+          },
           credentials: 'include',
           body: JSON.stringify({ endpoint: subscription.endpoint }),
         });

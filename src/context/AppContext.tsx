@@ -6,17 +6,22 @@ import {
   useCallback,
   ReactNode,
 } from 'react';
-import { Group, Expense, Member } from '../types';
+import { Group, GroupSummary, Expense, Member } from '../types';
 import * as api from '../api/client';
+import { LEGACY_GROUP_ID, getActiveGroupId, setActiveGroupId } from '../api/client';
 
 interface AppContextType {
+  activeGroupId: string;
+  groups: GroupSummary[];
   group: Group | null;
   expenses: Expense[];
   currentUser: Member | null;
   loading: boolean;
   error: string | null;
+  setActiveGroup: (groupId: string) => void;
   setCurrentUser: (user: Member | null) => void;
   refreshData: () => Promise<void>;
+  refreshGroups: () => Promise<void>;
   addMember: (name: string) => Promise<Member | null>;
   removeMember: (id: string) => Promise<void>;
   updateGroupSettings: (name: string, currency: string) => Promise<void>;
@@ -31,6 +36,10 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  // Active group is held in localStorage (via api/client helpers) so it survives
+  // reloads. Default is LEGACY_GROUP_ID; single-group users never see a picker.
+  const [activeGroupId, setActiveGroupIdState] = useState<string>(getActiveGroupId());
+  const [groups, setGroups] = useState<GroupSummary[]>([]);
   const [group, setGroup] = useState<Group | null>(null);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [currentUser, setCurrentUserState] = useState<Member | null>(null);
@@ -40,6 +49,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setCurrentUser = useCallback((user: Member | null) => {
     setCurrentUserState(user);
   }, []);
+
+  const setActiveGroup = useCallback((groupId: string) => {
+    setActiveGroupId(groupId);
+    setActiveGroupIdState(groupId);
+  }, []);
+
+  const refreshGroups = useCallback(async () => {
+    try {
+      const list = await api.listGroups();
+      setGroups(list);
+      // If the current active group isn't in the list, fall back to the first
+      // membership the user has. Never leaves the user on a group they've been
+      // removed from.
+      if (list.length > 0 && !list.some((g) => g.id === activeGroupId)) {
+        setActiveGroup(list[0].id);
+      }
+    } catch {
+      // If listing fails (e.g. not authenticated yet) leave empty silently.
+      setGroups([]);
+    }
+  }, [activeGroupId, setActiveGroup]);
 
   const refreshData = useCallback(async () => {
     try {
@@ -66,14 +96,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         id: crypto.randomUUID(),
         name: trimmedName,
       };
-      // Backend will deduplicate - if name exists, duplicates are removed
-      // and only the first occurrence is kept
       const updated = await api.updateGroup({
         members: [...group.members, newMember],
       });
       setGroup(updated);
-
-      // Find the member in the updated group (may be the existing one if deduplicated)
       const addedMember = updated.members.find(
         (m) => m.name.toLowerCase() === trimmedName.toLowerCase()
       );
@@ -85,9 +111,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const removeMember = useCallback(
     async (id: string) => {
       if (!group) return;
-      const updated = await api.updateGroup({
-        members: group.members.filter((m) => m.id !== id),
-      });
+      // Uses the dedicated soft-remove endpoint so the member's history is
+      // preserved in `removedMembers` (old expenses still resolve names).
+      const updated = await api.removeMember(id);
       setGroup(updated);
     },
     [group]
@@ -104,14 +130,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateProfile = useCallback(
     async (updates: Partial<Member>) => {
       const updated = await api.updateProfile(updates);
-      // Update group members list
       if (group) {
         const updatedMembers = group.members.map((m) =>
           m.id === updated.id ? updated : m
         );
         setGroup({ ...group, members: updatedMembers });
       }
-      // Update current user
       if (currentUser && currentUser.id === updated.id) {
         setCurrentUser(updated);
       }
@@ -166,13 +190,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [currentUser, expenses]
   );
 
-  // Initial load
+  // Initial load + reload on active group change.
   useEffect(() => {
     refreshData();
-  }, [refreshData]);
+  }, [refreshData, activeGroupId]);
 
+  // Refresh group list on mount and whenever active group changes
+  // (e.g. user just created or joined a group).
+  useEffect(() => {
+    refreshGroups();
+  }, [refreshGroups]);
 
-  // Update current user if member list changes (e.g., member removed)
+  // Drop currentUser if the member list changes (e.g. member removed).
   useEffect(() => {
     if (currentUser && group) {
       const memberExists = group.members.some((m) => m.id === currentUser.id);
@@ -182,7 +211,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [group, currentUser, setCurrentUser]);
 
-  // Refresh data when a push notification arrives (service worker broadcasts REFRESH_DATA)
+  // Refresh on SW REFRESH_DATA broadcast.
   useEffect(() => {
     if (!navigator.serviceWorker) return;
     const handleMessage = (event: MessageEvent) => {
@@ -194,7 +223,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => navigator.serviceWorker.removeEventListener('message', handleMessage);
   }, [refreshData]);
 
-  // Refresh data when the user returns to this tab
+  // Refresh when tab becomes visible again.
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
@@ -208,13 +237,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider
       value={{
+        activeGroupId,
+        groups,
         group,
         expenses,
         currentUser,
         loading,
         error,
+        setActiveGroup,
         setCurrentUser,
         refreshData,
+        refreshGroups,
         addMember,
         removeMember,
         updateGroupSettings,
@@ -238,3 +271,5 @@ export function useApp() {
   }
   return context;
 }
+
+export { LEGACY_GROUP_ID };

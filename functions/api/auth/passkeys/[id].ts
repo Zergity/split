@@ -33,7 +33,7 @@ export const onRequestDelete: PagesFunction<AuthEnv> = async (context) => {
     }
 
     // Check if user has more than one passkey (don't allow deleting last one)
-    const credentials = await getCredentials(context.env, session.memberId);
+    const credentials = await getCredentials(context.env, session.userId);
     if (credentials.length <= 1) {
       return Response.json(
         { success: false, error: 'Cannot delete your only passkey' },
@@ -41,7 +41,7 @@ export const onRequestDelete: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    const deleted = await deleteCredential(context.env, session.memberId, passkeyId);
+    const deleted = await deleteCredential(context.env, session.userId, passkeyId);
 
     if (!deleted) {
       return Response.json(

@@ -11,7 +11,11 @@ export function Balances() {
 
   if (!group) return null;
 
-  const balances = calculateBalances(expenses, group.members);
+  // Soft-removed members may still carry unsettled balances (e.g. they owe
+  // someone at the moment of removal). Including them here keeps the numbers
+  // honest; `Math.round(... * 10) !== 0` below hides anyone already at zero.
+  const allMembers = [...group.members, ...group.removedMembers];
+  const balances = calculateBalances(expenses, allMembers);
   const settlements = calculateSettlements(balances);
 
   const sortedBalances = [...balances].sort((a, b) => b.signedBalance - a.signedBalance);

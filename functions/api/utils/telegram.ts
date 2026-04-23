@@ -15,20 +15,20 @@ type InlineKeyboard = { inline_keyboard: Array<Array<{ text: string; callback_da
  * Silently skips if member has no Telegram connected or pref is disabled.
  */
 export async function sendTelegramNotification(
-  memberId: string,
+  userId: string,
   event: NotifyEvent,
   text: string,
   env: TelegramEnv,
   inlineKeyboard?: InlineKeyboard,
 ): Promise<void> {
-  const data = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(memberId), 'json');
+  const data = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(userId), 'json');
   if (!data) return;
 
-  // Cross-check: verify this chatId still belongs to this memberId (detect stale/duplicate entries)
+  // Cross-check: verify this chatId still belongs to this userId (detect stale/duplicate entries)
   const ownerOfChat = await env.SPLITTER_KV.get(KV_KEYS.telegramChatId(data.chatId));
-  if (ownerOfChat !== memberId) {
+  if (ownerOfChat !== userId) {
     // Stale entry — clean up and skip
-    await env.SPLITTER_KV.delete(KV_KEYS.telegram(memberId));
+    await env.SPLITTER_KV.delete(KV_KEYS.telegram(userId));
     return;
   }
 
@@ -51,7 +51,7 @@ export async function sendTelegramNotification(
   if (res.status === 403) {
     // Bot was blocked — clean up connection
     await env.SPLITTER_KV.delete(KV_KEYS.telegramChatId(data.chatId));
-    await env.SPLITTER_KV.delete(KV_KEYS.telegram(memberId));
+    await env.SPLITTER_KV.delete(KV_KEYS.telegram(userId));
   }
 }
 
@@ -59,14 +59,14 @@ export async function sendTelegramNotification(
  * Notify multiple members, excluding the actor.
  */
 export async function notifyMembers(
-  memberIds: string[],
-  excludeMemberId: string,
+  userIds: string[],
+  excludeUserId: string,
   event: NotifyEvent,
   text: string,
   env: TelegramEnv,
   inlineKeyboard?: InlineKeyboard,
 ): Promise<void> {
-  const targets = memberIds.filter((id) => id !== excludeMemberId);
+  const targets = userIds.filter((id) => id !== excludeUserId);
   await Promise.all(targets.map((id) => sendTelegramNotification(id, event, text, env, inlineKeyboard)));
 }
 
@@ -76,8 +76,8 @@ export async function notifyMembers(
  */
 export async function sendDebouncedEditNotification(
   expenseId: string,
-  memberIds: string[],
-  excludeMemberId: string,
+  userIds: string[],
+  excludeUserId: string,
   text: string,
   env: TelegramEnv,
   inlineKeyboard?: InlineKeyboard,
@@ -87,7 +87,7 @@ export async function sendDebouncedEditNotification(
   if (existing) return false;
 
   await env.SPLITTER_KV.put(debounceKey, '1', { expirationTtl: DEBOUNCE_NOTIFY_TTL_SECONDS });
-  await notifyMembers(memberIds, excludeMemberId, 'expenseEdited', text, env, inlineKeyboard);
+  await notifyMembers(userIds, excludeUserId, 'expenseEdited', text, env, inlineKeyboard);
   return true;
 }
 

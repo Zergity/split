@@ -4,9 +4,17 @@ import {
   DEFAULT_NOTIFY_PREFS,
   TELEGRAM_CONNECT_TTL_SECONDS,
 } from '../types/auth';
-import type { TelegramData, TelegramConnectToken, NotifyPrefs } from '../types/auth';
+import type { TelegramData, TelegramConnectToken, NotifyPrefs, AuthEnv } from '../types/auth';
 import { editTelegramMessage, sendTelegramNotification } from '../utils/telegram';
 import { getTokenFromCookies, verifySession } from '../utils/jwt';
+import {
+  LEGACY_GROUP_ID,
+  getExpenses as getGroupExpenses,
+  saveExpenses as saveGroupExpenses,
+  getGroup as getGroupRecord,
+  findMember,
+} from '../utils/groups';
+import { getMemberships } from '../utils/users';
 
 interface Env {
   SPLITTER_KV: KVNamespace;
@@ -17,11 +25,13 @@ interface Env {
 
 // ── JWT helper ─────────────────────────────────────────────────────────────
 
-async function getMemberIdFromJWT(request: Request, env: Env): Promise<string | null> {
+// Resolve the authenticated user's id. Telegram bindings live on the User
+// (one Telegram account per person, applied across all groups they're in).
+async function getUserIdFromJWT(request: Request, env: Env): Promise<string | null> {
   const token = getTokenFromCookies(request);
   if (!token) return null;
   const session = await verifySession(env, token);
-  return session?.memberId ?? null;
+  return session?.userId ?? null;
 }
 
 // ── Route helpers ──────────────────────────────────────────────────────────
@@ -35,12 +45,12 @@ function getRoutePath(request: Request): string {
 // ── Handlers ───────────────────────────────────────────────────────────────
 
 async function handleConnect(request: Request, env: Env): Promise<Response> {
-  const memberId = await getMemberIdFromJWT(request, env);
-  if (!memberId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  const userId = await getUserIdFromJWT(request, env);
+  if (!userId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
   const token = crypto.randomUUID();
   const payload: TelegramConnectToken = {
-    memberId,
+    userId,
     expiresAt: new Date(Date.now() + TELEGRAM_CONNECT_TTL_SECONDS * 1000).toISOString(),
   };
   await env.SPLITTER_KV.put(KV_KEYS.telegramConnect(token), JSON.stringify(payload), {
@@ -58,21 +68,21 @@ async function handleConnect(request: Request, env: Env): Promise<Response> {
 }
 
 async function handleDisconnect(request: Request, env: Env): Promise<Response> {
-  const memberId = await getMemberIdFromJWT(request, env);
-  if (!memberId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  const userId = await getUserIdFromJWT(request, env);
+  if (!userId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const data = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(memberId), 'json');
+  const data = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(userId), 'json');
   if (data) await env.SPLITTER_KV.delete(KV_KEYS.telegramChatId(data.chatId));
-  await env.SPLITTER_KV.delete(KV_KEYS.telegram(memberId));
+  await env.SPLITTER_KV.delete(KV_KEYS.telegram(userId));
 
   return Response.json({ success: true });
 }
 
 async function handleStatus(request: Request, env: Env): Promise<Response> {
-  const memberId = await getMemberIdFromJWT(request, env);
-  if (!memberId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  const userId = await getUserIdFromJWT(request, env);
+  if (!userId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
-  const data = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(memberId), 'json');
+  const data = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(userId), 'json');
   return Response.json({
     success: true,
     data: { connected: !!data, notifyPrefs: data?.notifyPrefs ?? null, telegramName: data?.telegramName ?? null },
@@ -80,18 +90,18 @@ async function handleStatus(request: Request, env: Env): Promise<Response> {
 }
 
 async function handlePreferences(request: Request, env: Env): Promise<Response> {
-  const memberId = await getMemberIdFromJWT(request, env);
-  if (!memberId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
+  const userId = await getUserIdFromJWT(request, env);
+  if (!userId) return Response.json({ success: false, error: 'Unauthorized' }, { status: 401 });
 
   const updates = await request.json() as Partial<NotifyPrefs>;
-  const data = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(memberId), 'json');
+  const data = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(userId), 'json');
   if (!data) return Response.json({ success: false, error: 'Not connected' }, { status: 400 });
 
   const updated: TelegramData = {
     ...data,
     notifyPrefs: { ...DEFAULT_NOTIFY_PREFS, ...data.notifyPrefs, ...updates },
   };
-  await env.SPLITTER_KV.put(KV_KEYS.telegram(memberId), JSON.stringify(updated));
+  await env.SPLITTER_KV.put(KV_KEYS.telegram(userId), JSON.stringify(updated));
 
   return Response.json({ success: true, data: { notifyPrefs: updated.notifyPrefs } });
 }
@@ -121,14 +131,14 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
     const chatId = String(ctx.chat.id);
     const telegramName = [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(' ') || ctx.from?.username || 'Unknown';
 
-    // Enforce 1:1 — if this Telegram account is already linked to another member, disconnect it first
-    const existingMemberId = await env.SPLITTER_KV.get(KV_KEYS.telegramChatId(chatId));
-    if (existingMemberId && existingMemberId !== connectData.memberId) {
-      await env.SPLITTER_KV.delete(KV_KEYS.telegram(existingMemberId));
+    // Enforce 1:1 — if this Telegram account is already linked to another user, disconnect it first
+    const existingUserId = await env.SPLITTER_KV.get(KV_KEYS.telegramChatId(chatId));
+    if (existingUserId && existingUserId !== connectData.userId) {
+      await env.SPLITTER_KV.delete(KV_KEYS.telegram(existingUserId));
     }
 
-    // Also clean up if this app account was previously linked to a different Telegram chat
-    const existingData = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(connectData.memberId), 'json');
+    // Also clean up if this user was previously linked to a different Telegram chat
+    const existingData = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(connectData.userId), 'json');
     if (existingData && existingData.chatId !== chatId) {
       await env.SPLITTER_KV.delete(KV_KEYS.telegramChatId(existingData.chatId));
     }
@@ -139,57 +149,69 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       connectedAt: new Date().toISOString(),
       notifyPrefs: DEFAULT_NOTIFY_PREFS,
     };
-    await env.SPLITTER_KV.put(KV_KEYS.telegram(connectData.memberId), JSON.stringify(telegramData));
-    await env.SPLITTER_KV.put(KV_KEYS.telegramChatId(chatId), connectData.memberId);
+    await env.SPLITTER_KV.put(KV_KEYS.telegram(connectData.userId), JSON.stringify(telegramData));
+    await env.SPLITTER_KV.put(KV_KEYS.telegramChatId(chatId), connectData.userId);
     await env.SPLITTER_KV.delete(KV_KEYS.telegramConnect(token));
 
-    const group = await env.SPLITTER_KV.get<{ members: Array<{ id: string; name: string }> }>('group', 'json');
-    const memberName = group?.members.find((m) => m.id === connectData.memberId)?.name ?? connectData.memberId;
-
-    await ctx.reply(`✅ Connected successfully! Notifications for <b>${memberName}</b> will be sent here.`, { parse_mode: 'HTML' });
+    // Show the user's first-group display name in the confirmation for a personal touch.
+    const memberships = await getMemberships(env as unknown as AuthEnv, connectData.userId);
+    let displayName = connectData.userId;
+    if (memberships.length > 0) {
+      const grp = await getGroupRecord(env as unknown as AuthEnv, memberships[0].groupId);
+      const me = grp ? findMember(grp, memberships[0].memberId) : undefined;
+      if (me) displayName = me.name;
+    }
+    await ctx.reply(`✅ Connected successfully! Notifications for <b>${displayName}</b> will be sent here.`, { parse_mode: 'HTML' });
   });
 
-  // Callback query — button taps
+  // Callback query — button taps.
+  // Callback data format: "<action>:<groupId>:<expenseId>". Older messages sent
+  // before multi-group support used "<action>:<expenseId>" — those fall back to
+  // the legacy 1matrix group so existing in-flight notifications still work.
   bot.on('callback_query:data', async (ctx) => {
     const data = ctx.callbackQuery.data;
     const chatId = String(ctx.callbackQuery.from.id);
     const messageId = ctx.callbackQuery.message?.message_id;
 
-    const memberId = await env.SPLITTER_KV.get(KV_KEYS.telegramChatId(chatId));
-    if (!memberId) {
+    const userId = await env.SPLITTER_KV.get(KV_KEYS.telegramChatId(chatId));
+    if (!userId) {
       await ctx.answerCallbackQuery({ text: 'Session expired. Please reconnect.' });
       return;
     }
 
-    const [action, expenseId] = data.split(':');
+    const parts = data.split(':');
+    const action = parts[0];
+    const [groupId, expenseId] = parts.length >= 3
+      ? [parts[1], parts[2]]
+      : [LEGACY_GROUP_ID, parts[1]];
 
     if (action === 'signoff') {
       await ctx.answerCallbackQuery();
       await ctx.editMessageReplyMarkup({
         reply_markup: { inline_keyboard: [[
-          { text: '✅ Confirm', callback_data: `yes_signoff:${expenseId}` },
-          { text: '❌ Cancel', callback_data: `no:${expenseId}` },
+          { text: '✅ Confirm', callback_data: `yes_signoff:${groupId}:${expenseId}` },
+          { text: '❌ Cancel', callback_data: `no:${groupId}:${expenseId}` },
         ]] },
       });
     } else if (action === 'yes_signoff') {
-      await handleSignOff(ctx, memberId, expenseId, chatId, messageId, env);
+      await handleSignOff(ctx, userId, groupId, expenseId, chatId, messageId, env);
     } else if (action === 'settle_accept') {
       await ctx.answerCallbackQuery();
       await ctx.editMessageReplyMarkup({
         reply_markup: { inline_keyboard: [[
-          { text: '✅ Confirm receipt', callback_data: `yes_settle_accept:${expenseId}` },
-          { text: '❌ Cancel', callback_data: `no:${expenseId}` },
+          { text: '✅ Confirm receipt', callback_data: `yes_settle_accept:${groupId}:${expenseId}` },
+          { text: '❌ Cancel', callback_data: `no:${groupId}:${expenseId}` },
         ]] },
       });
     } else if (action === 'yes_settle_accept') {
-      await handleSettleAccept(ctx, memberId, expenseId, chatId, messageId, env);
+      await handleSettleAccept(ctx, userId, groupId, expenseId, chatId, messageId, env);
     } else if (action === 'no') {
       await ctx.answerCallbackQuery({ text: 'Cancelled.' });
       await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } });
       await ctx.reply('❎ Cancelled.');
     } else if (action === 'settle_reject') {
       await ctx.answerCallbackQuery({ text: '❌ Rejected.' });
-      await processRejection(memberId, expenseId, chatId, messageId, ctx, env);
+      await processRejection(userId, groupId, expenseId, chatId, messageId, ctx, env);
     }
   });
 
@@ -207,20 +229,31 @@ type Expense = {
   splits: Array<{ memberId: string; amount: number; signedOff: boolean; signedAt?: string }>;
 };
 
-type Member = { id: string; name: string };
-type Group = { currency: string; members: Member[] };
-
-function getMemberName(members: Member[], id: string): string {
-  return members.find((m) => m.id === id)?.name ?? id;
-}
-
 function formatAmount(amount: number, currency: string): string {
   return `${amount.toLocaleString('vi-VN')} ${currency}`;
 }
 
-async function getGroupData(env: Env): Promise<{ members: Member[]; currency: string }> {
-  const group = await env.SPLITTER_KV.get<Group>('group', 'json');
-  return { members: group?.members ?? [], currency: group?.currency ?? '' };
+// Resolve the caller's memberId within the target group via their user
+// memberships. Telegram itself only knows a userId (global); the expense
+// split rows are keyed by per-group memberId.
+async function resolveCallerMemberId(
+  env: Env,
+  userId: string,
+  groupId: string,
+): Promise<string | null> {
+  const memberships = await getMemberships(env as unknown as AuthEnv, userId);
+  return memberships.find((m) => m.groupId === groupId)?.memberId ?? null;
+}
+
+// Resolve the payer's userId in a group for notifying them after an action.
+async function userIdForMember(
+  env: Env,
+  groupId: string,
+  memberId: string,
+): Promise<string | null> {
+  const group = await getGroupRecord(env as unknown as AuthEnv, groupId);
+  if (!group) return null;
+  return findMember(group, memberId)?.userId ?? null;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -228,13 +261,20 @@ type CallbackCtx = any;
 
 async function handleSignOff(
   ctx: CallbackCtx,
-  memberId: string,
+  userId: string,
+  groupId: string,
   expenseId: string,
   chatId: string,
   messageId: number | undefined,
   env: Env,
 ): Promise<void> {
-  const expenses = await env.SPLITTER_KV.get<Expense[]>('expenses', 'json') ?? [];
+  const group = await getGroupRecord(env as unknown as AuthEnv, groupId);
+  if (!group) { await ctx.answerCallbackQuery({ text: 'Group not found.' }); return; }
+
+  const memberId = await resolveCallerMemberId(env, userId, groupId);
+  if (!memberId) { await ctx.answerCallbackQuery({ text: 'You are not a member of this group.' }); return; }
+
+  const expenses = (await getGroupExpenses(env as unknown as AuthEnv, groupId)) as Expense[];
   const expense = expenses.find((e) => e.id === expenseId);
   if (!expense) { await ctx.answerCallbackQuery({ text: 'Expense not found.' }); return; }
 
@@ -243,11 +283,11 @@ async function handleSignOff(
 
   split.signedOff = true;
   split.signedAt = new Date().toISOString();
-  await env.SPLITTER_KV.put('expenses', JSON.stringify(expenses));
+  await saveGroupExpenses(env as unknown as AuthEnv, groupId, expenses);
 
-  const { members, currency } = await getGroupData(env);
-  const payerName = getMemberName(members, expense.paidBy);
-  const myName = getMemberName(members, memberId);
+  const currency = group.currency;
+  const payerName = findMember(group, expense.paidBy)?.name ?? expense.paidBy;
+  const myName = findMember(group, memberId)?.name ?? memberId;
   const myShare = formatAmount(split.amount, currency);
   const totalConfirmed = expense.splits.filter((s) => s.signedOff).length;
   const totalSplits = expense.splits.length;
@@ -259,28 +299,37 @@ async function handleSignOff(
     env,
   );
 
-  await sendTelegramNotification(
-    expense.paidBy,
-    'expenseEdited',
-    `✅ <b>${myName}</b> confirmed expense\n\n📌 ${expense.description}\n💵 Their share: <b>${myShare}</b>\n\n✅ Confirmed: ${totalConfirmed}/${totalSplits} members`,
-    env,
-  );
+  const payerUserId = await userIdForMember(env, groupId, expense.paidBy);
+  if (payerUserId) {
+    await sendTelegramNotification(
+      payerUserId,
+      'expenseEdited',
+      `✅ <b>${myName}</b> confirmed expense\n\n📌 ${expense.description}\n💵 Their share: <b>${myShare}</b>\n\n✅ Confirmed: ${totalConfirmed}/${totalSplits} members`,
+      env,
+    );
+  }
 }
 
 async function handleSettleAccept(
   ctx: CallbackCtx,
-  memberId: string,
+  userId: string,
+  groupId: string,
   expenseId: string,
   chatId: string,
   messageId: number | undefined,
   env: Env,
 ): Promise<void> {
-  const expenses = await env.SPLITTER_KV.get<Expense[]>('expenses', 'json') ?? [];
+  const group = await getGroupRecord(env as unknown as AuthEnv, groupId);
+  if (!group) { await ctx.answerCallbackQuery({ text: 'Group not found.' }); return; }
+
+  const memberId = await resolveCallerMemberId(env, userId, groupId);
+  if (!memberId) { await ctx.answerCallbackQuery({ text: 'You are not a member of this group.' }); return; }
+
+  const expenses = (await getGroupExpenses(env as unknown as AuthEnv, groupId)) as Expense[];
   const expense = expenses.find((e) => e.id === expenseId);
   if (!expense) { await ctx.answerCallbackQuery({ text: 'Settlement not found.' }); return; }
 
   const split = expense.splits.find((s) => s.memberId === memberId);
-  console.log('[settle_accept] memberId:', memberId, 'splits:', expense.splits.map(s => s.memberId));
   if (!split) {
     await ctx.answerCallbackQuery({ text: 'You are not part of this settlement.' });
     return;
@@ -288,11 +337,11 @@ async function handleSettleAccept(
 
   split.signedOff = true;
   split.signedAt = new Date().toISOString();
-  await env.SPLITTER_KV.put('expenses', JSON.stringify(expenses));
+  await saveGroupExpenses(env as unknown as AuthEnv, groupId, expenses);
 
-  const { members, currency } = await getGroupData(env);
-  const payerName = getMemberName(members, expense.paidBy);
-  const receiverName = getMemberName(members, memberId);
+  const currency = group.currency;
+  const payerName = findMember(group, expense.paidBy)?.name ?? expense.paidBy;
+  const receiverName = findMember(group, memberId)?.name ?? memberId;
 
   await ctx.answerCallbackQuery({ text: '✅ Receipt confirmed!' });
   if (messageId) await editTelegramMessage(
@@ -301,30 +350,40 @@ async function handleSettleAccept(
     env,
   );
 
-  await sendTelegramNotification(
-    expense.paidBy,
-    'settlementAccepted',
-    `✅ <b>${receiverName}</b> confirmed receiving your payment\n\n💰 Amount: <b>${formatAmount(expense.amount, currency)}</b>\n📝 Note: ${expense.description}`,
-    env,
-  );
+  const payerUserId = await userIdForMember(env, groupId, expense.paidBy);
+  if (payerUserId) {
+    await sendTelegramNotification(
+      payerUserId,
+      'settlementAccepted',
+      `✅ <b>${receiverName}</b> confirmed receiving your payment\n\n💰 Amount: <b>${formatAmount(expense.amount, currency)}</b>\n📝 Note: ${expense.description}`,
+      env,
+    );
+  }
 }
 
 async function processRejection(
-  memberId: string,
+  userId: string,
+  groupId: string,
   expenseId: string,
   chatId: string,
   messageId: number | undefined,
   ctx: CallbackCtx | null,
   env: Env,
 ): Promise<void> {
-  const expenses = await env.SPLITTER_KV.get<Expense[]>('expenses', 'json') ?? [];
+  const group = await getGroupRecord(env as unknown as AuthEnv, groupId);
+  if (!group) return;
+
+  const memberId = await resolveCallerMemberId(env, userId, groupId);
+  if (!memberId) return;
+
+  const expenses = (await getGroupExpenses(env as unknown as AuthEnv, groupId)) as Expense[];
   const expense = expenses.find((e) => e.id === expenseId);
 
-  const { members, currency } = await getGroupData(env);
-  const rejecterName = getMemberName(members, memberId);
+  const currency = group.currency;
+  const rejecterName = findMember(group, memberId)?.name ?? memberId;
 
   if (ctx && messageId && expense) {
-    const payerName = getMemberName(members, expense.paidBy);
+    const payerName = findMember(group, expense.paidBy)?.name ?? expense.paidBy;
     await editTelegramMessage(
       chatId, messageId,
       `❌ <b>You rejected this payment</b>\n\n💰 Amount: <b>${formatAmount(expense.amount, currency)}</b>\n👤 From: <b>${payerName}</b>\n📝 Note: ${expense.description}`,
@@ -333,12 +392,15 @@ async function processRejection(
   }
 
   if (expense) {
-    await sendTelegramNotification(
-      expense.paidBy,
-      'settlementRejected',
-      `❌ <b>${rejecterName}</b> rejected your payment\n\n💰 Amount: <b>${formatAmount(expense.amount, currency)}</b>\n📝 Note: ${expense.description}`,
-      env,
-    );
+    const payerUserId = await userIdForMember(env, groupId, expense.paidBy);
+    if (payerUserId) {
+      await sendTelegramNotification(
+        payerUserId,
+        'settlementRejected',
+        `❌ <b>${rejecterName}</b> rejected your payment\n\n💰 Amount: <b>${formatAmount(expense.amount, currency)}</b>\n📝 Note: ${expense.description}`,
+        env,
+      );
+    }
   }
 }
 

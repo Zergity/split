@@ -45,10 +45,10 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     }
 
     const env = context.env;
-    const { memberId } = session;
+    const { userId } = session;
 
     // Get and consume the challenge (one-time use)
-    const expectedChallenge = await consumeChallenge(env, memberId, 'registration');
+    const expectedChallenge = await consumeChallenge(env, userId, 'registration');
     if (!expectedChallenge) {
       return Response.json(
         { success: false, error: 'Challenge expired or not found. Please try again.' },
@@ -89,7 +89,7 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       friendlyName: friendlyName || getDefaultFriendlyName(context.request),
     };
 
-    await addCredential(env, memberId, storedCredential);
+    await addCredential(env, userId, storedCredential);
 
     // Return success without creating a new session (user is already logged in)
     return Response.json({

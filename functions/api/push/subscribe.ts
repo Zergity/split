@@ -1,16 +1,14 @@
 import type { AuthEnv, PushSubscriptionRecord } from '../types/auth';
 import { KV_KEYS } from '../types/auth';
-import { getTokenFromCookies, verifySession } from '../utils/jwt';
+import { requireGroup } from '../utils/session';
+
+// Push subscriptions are keyed per (userId, groupId) so a device only
+// receives notifications for the groups it has actively subscribed to.
+// The client calls this once per group while viewing it.
 
 export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
-  const token = getTokenFromCookies(context.request);
-  if (!token) {
-    return Response.json({ success: false, error: 'Not authenticated' }, { status: 401 });
-  }
-  const session = await verifySession(context.env, token);
-  if (!session) {
-    return Response.json({ success: false, error: 'Session expired' }, { status: 401 });
-  }
+  const ctx = await requireGroup(context.env, context.request);
+  if (ctx instanceof Response) return ctx;
 
   const { subscription } = (await context.request.json()) as {
     subscription: { endpoint: string; keys: { p256dh: string; auth: string } };
@@ -20,11 +18,10 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     return Response.json({ success: false, error: 'Invalid subscription' }, { status: 400 });
   }
 
-  const key = KV_KEYS.pushSubscriptions(session.memberId);
+  const key = KV_KEYS.pushSubscriptions(ctx.session.userId, ctx.group.id);
   const existing =
     (await context.env.SPLITTER_KV.get<PushSubscriptionRecord[]>(key, 'json')) || [];
 
-  // Deduplicate by endpoint
   const filtered = existing.filter((s) => s.endpoint !== subscription.endpoint);
   filtered.push({
     endpoint: subscription.endpoint,
@@ -39,21 +36,15 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
 };
 
 export const onRequestDelete: PagesFunction<AuthEnv> = async (context) => {
-  const token = getTokenFromCookies(context.request);
-  if (!token) {
-    return Response.json({ success: false, error: 'Not authenticated' }, { status: 401 });
-  }
-  const session = await verifySession(context.env, token);
-  if (!session) {
-    return Response.json({ success: false, error: 'Session expired' }, { status: 401 });
-  }
+  const ctx = await requireGroup(context.env, context.request);
+  if (ctx instanceof Response) return ctx;
 
   const { endpoint } = (await context.request.json()) as { endpoint: string };
   if (!endpoint) {
     return Response.json({ success: false, error: 'endpoint is required' }, { status: 400 });
   }
 
-  const key = KV_KEYS.pushSubscriptions(session.memberId);
+  const key = KV_KEYS.pushSubscriptions(ctx.session.userId, ctx.group.id);
   const existing =
     (await context.env.SPLITTER_KV.get<PushSubscriptionRecord[]>(key, 'json')) || [];
   const filtered = existing.filter((s) => s.endpoint !== endpoint);
