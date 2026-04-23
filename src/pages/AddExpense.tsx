@@ -78,6 +78,9 @@ export function AddExpense() {
     if (!group) return [1];
     return [...new Set(group.members.map((m) => m.share ?? 1))].sort((a, b) => a - b);
   }, [group]);
+  // "All" is derived state: on when every group member is selected.
+  const allMembersSelected =
+    !!group && group.members.length > 0 && selectedMemberIds.size === group.members.length;
   // "Split" when every included member's share equals their configured group
   // share (or 1 if unset) — i.e. nobody has overridden the admin-set weights.
   const allAtDefaultRates = Object.entries(memberShares).length > 0 &&
@@ -224,6 +227,40 @@ export function AddExpense() {
     setReceiptDate(new Date().toISOString());
     setDescription('');
     setTotalAmount(0);
+  };
+
+  // Bulk select/deselect every member. In shares mode, also populates/clears
+  // the per-member share map (using each member's configured share as the
+  // default). In items mode, deselecting-all unassigns every item.
+  const handleToggleAll = () => {
+    if (!group) return;
+    const allSelected =
+      group.members.length > 0 &&
+      selectedMemberIds.size === group.members.length;
+
+    if (allSelected) {
+      setSelectedMemberIds(new Set());
+      if (splitMode === 'shares') {
+        setMemberShares({});
+      } else {
+        handleItemsChange(items.map(item => ({ ...item, memberId: undefined })));
+      }
+    } else {
+      const allIds = new Set(group.members.map(m => m.id));
+      setSelectedMemberIds(allIds);
+      if (splitMode === 'shares') {
+        // Preserve already-edited share values; fill missing ones with the
+        // member's configured default.
+        setMemberShares(prev => {
+          const next = { ...prev };
+          group.members.forEach(m => {
+            if (!(m.id in next)) next[m.id] = m.share ?? 1;
+          });
+          return next;
+        });
+      }
+      // Items mode: selection only — user still assigns items by drag or tap.
+    }
   };
 
   const handleMemberTap = (memberId: string) => {
@@ -570,6 +607,17 @@ export function AddExpense() {
           </div>
 
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleToggleAll}
+              className={`px-3 py-1.5 rounded-full text-sm select-none transition-colors ${
+                allMembersSelected
+                  ? 'bg-cyan-700 text-white hover:bg-red-500 font-semibold'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              All
+            </button>
             {group.members.map((member) => {
               const isIncluded = includedMemberIds.has(member.id);
               const isYou = currentUser && member.id === currentUser.id;

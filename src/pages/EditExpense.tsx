@@ -183,6 +183,58 @@ export function EditExpense() {
     }
   };
 
+  const allMembersSelected =
+    !!group && group.members.length > 0 && includedMemberIds.size === group.members.length;
+
+  // Bulk select/deselect every member. Mirrors the per-member-tap rules:
+  // shares mode requires isPayer; items mode respects canOnlyAssign
+  // (assign-only callers cannot clear existing assignments or create new items).
+  const handleToggleAll = () => {
+    if (!group) return;
+    if (allMembersSelected) {
+      if (splitMode === 'shares') {
+        if (!isPayer) return;
+        setMemberShares({});
+      } else {
+        if (canOnlyAssign) return;
+        handleItemsChange(items.map(item => ({ ...item, memberId: undefined })));
+      }
+    } else {
+      if (splitMode === 'shares') {
+        if (!isPayer) return;
+        setMemberShares(prev => {
+          const next = { ...prev };
+          group.members.forEach(m => {
+            if (!(m.id in next)) next[m.id] = m.share ?? 1;
+          });
+          return next;
+        });
+      } else {
+        // Items mode: assign any free slots first, then fall back to creating
+        // new zero-amount items (matching handleMemberTap's single-member path).
+        const newItems = [...items];
+        const freeSlots = newItems
+          .map((item, idx) => ({ item, idx }))
+          .filter(x => !x.item.memberId);
+        const missing = group.members.filter(m => !includedMemberIds.has(m.id));
+        for (const m of missing) {
+          const slot = freeSlots.shift();
+          if (slot) {
+            newItems[slot.idx] = { ...newItems[slot.idx], memberId: m.id };
+          } else if (!canOnlyAssign) {
+            newItems.push({
+              id: crypto.randomUUID(),
+              description: '',
+              amount: 0,
+              memberId: m.id,
+            });
+          }
+        }
+        handleItemsChange(newItems);
+      }
+    }
+  };
+
   const handleMemberTap = (memberId: string) => {
     if (splitMode === 'shares') {
       if (!isPayer) return;
@@ -491,6 +543,17 @@ export function EditExpense() {
             </label>
 
             <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleToggleAll}
+                className={`px-3 py-1.5 rounded-full text-sm select-none transition-colors ${
+                  allMembersSelected
+                    ? 'bg-cyan-700 text-white hover:bg-red-500 font-semibold'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                All
+              </button>
               {group.members.map((member) => {
                 const isIncluded = includedMemberIds.has(member.id);
                 const isYou = currentUser && member.id === currentUser.id;
