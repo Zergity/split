@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Expense, Member } from '../types';
 import { calculateBillGoc, calculateDiscountAmount, formatCurrency, formatRelativeTime, getTagColor, isDeleted } from '../utils/balances';
@@ -24,7 +24,23 @@ export function ExpenseCard({
   onDelete,
   initialExpanded = false,
 }: ExpenseCardProps) {
-  const { currentUser, updateExpense, claimExpenseItem, deleteExpense } = useApp();
+  const { currentUser, updateExpense, claimExpenseItem, deleteExpense, expenses: allExpenses } = useApp();
+
+  // Tag suggestions: every tag that appears on other (non-deleted) expenses in
+  // the group, sorted by frequency descending, minus tags already on this one.
+  const tagSuggestions = useMemo(() => {
+    const freq = new Map<string, number>();
+    allExpenses.forEach((e) => {
+      e.tags?.filter((t) => t !== 'deleted').forEach((t) =>
+        freq.set(t, (freq.get(t) || 0) + 1)
+      );
+    });
+    const existing = new Set(expense.tags ?? []);
+    return [...freq.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([tag]) => tag)
+      .filter((t) => !existing.has(t));
+  }, [allExpenses, expense.tags]);
   const [expanded, setExpanded] = useState(initialExpanded);
   const [showReceipt, setShowReceipt] = useState(false);
   const [editingTags, setEditingTags] = useState(false);
@@ -179,54 +195,81 @@ export function ExpenseCard({
               </button>
             )}
             {editingTags && (
-              <div className="flex items-center gap-1">
-                <input
-                  type="text"
-                  value={tagInput}
-                  onChange={(e) => setTagInput(e.target.value)}
-                  onKeyDown={async (e) => {
-                    if (e.key === 'Enter' && tagInput.trim()) {
-                      setSavingTags(true);
-                      const newTags = [...(expense.tags || []), tagInput.trim().toLowerCase()];
-                      await updateExpense(expense.id, { tags: [...new Set(newTags)] });
-                      setTagInput('');
-                      setSavingTags(false);
-                    } else if (e.key === 'Escape') {
+              <>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter' && tagInput.trim()) {
+                        setSavingTags(true);
+                        const newTags = [...(expense.tags || []), tagInput.trim().toLowerCase()];
+                        await updateExpense(expense.id, { tags: [...new Set(newTags)] });
+                        setTagInput('');
+                        setSavingTags(false);
+                      } else if (e.key === 'Escape') {
+                        setEditingTags(false);
+                        setTagInput('');
+                      }
+                    }}
+                    placeholder="add tag"
+                    className="w-20 text-xs bg-gray-700 border border-gray-600 rounded px-2 py-0.5 text-gray-100"
+                    autoFocus
+                    disabled={savingTags}
+                  />
+                  <button
+                    onClick={async () => {
+                      if (tagInput.trim()) {
+                        setSavingTags(true);
+                        const newTags = [...(expense.tags || []), tagInput.trim().toLowerCase()];
+                        await updateExpense(expense.id, { tags: [...new Set(newTags)] });
+                        setTagInput('');
+                        setSavingTags(false);
+                      }
+                      setEditingTags(false);
+                    }}
+                    className="text-xs text-green-400"
+                    disabled={savingTags}
+                  >
+                    {savingTags ? '...' : 'OK'}
+                  </button>
+                  <button
+                    onClick={() => {
                       setEditingTags(false);
                       setTagInput('');
-                    }
-                  }}
-                  placeholder="add tag"
-                  className="w-20 text-xs bg-gray-700 border border-gray-600 rounded px-2 py-0.5 text-gray-100"
-                  autoFocus
-                  disabled={savingTags}
-                />
-                <button
-                  onClick={async () => {
-                    if (tagInput.trim()) {
-                      setSavingTags(true);
-                      const newTags = [...(expense.tags || []), tagInput.trim().toLowerCase()];
-                      await updateExpense(expense.id, { tags: [...new Set(newTags)] });
-                      setTagInput('');
-                      setSavingTags(false);
-                    }
-                    setEditingTags(false);
-                  }}
-                  className="text-xs text-green-400"
-                  disabled={savingTags}
-                >
-                  {savingTags ? '...' : 'OK'}
+                    }}
+                    className="text-xs text-gray-500"
+                  >
+                    ×
                 </button>
-                <button
-                  onClick={() => {
-                    setEditingTags(false);
-                    setTagInput('');
-                  }}
-                  className="text-xs text-gray-500"
-                >
-                  ×
-                </button>
-              </div>
+                </div>
+                {/* Existing group tags, frequency-sorted. Tap to add; editor
+                    stays open for batch tagging. */}
+                {tagSuggestions.length > 0 && (
+                  <div className="flex flex-wrap gap-1 w-full">
+                    {tagSuggestions.map((tag) => {
+                      const color = getTagColor(tag);
+                      return (
+                        <button
+                          key={tag}
+                          onClick={async () => {
+                            setSavingTags(true);
+                            const newTags = [...(expense.tags || []), tag];
+                            await updateExpense(expense.id, { tags: [...new Set(newTags)] });
+                            setSavingTags(false);
+                          }}
+                          disabled={savingTags}
+                          className={`text-xs px-2 py-0.5 rounded-full ${color.bg} ${color.text} opacity-60 hover:opacity-100 disabled:opacity-40`}
+                          title={`Add tag "${tag}"`}
+                        >
+                          + {tag}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </>
             )}
           </div>}
         </div>

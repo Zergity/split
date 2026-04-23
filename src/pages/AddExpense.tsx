@@ -485,6 +485,30 @@ export function AddExpense() {
               )}
             </div>
           </div>
+
+          {/* Available tags in the group, in descending frequency order.
+              Tap to add. Already-selected tags are hidden (they render in the
+              row above with their × remove button). */}
+          {tagSuggestions.filter((t) => !tags.includes(t)).length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {tagSuggestions
+                .filter((t) => !tags.includes(t))
+                .map((tag) => {
+                  const color = getTagColor(tag);
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => setTags([...tags, tag])}
+                      className={`text-xs px-2 py-0.5 rounded-full ${color.bg} ${color.text} opacity-60 hover:opacity-100`}
+                      title={`Add tag "${tag}"`}
+                    >
+                      + {tag}
+                    </button>
+                  );
+                })}
+            </div>
+          )}
         </div>
 
         <div>
