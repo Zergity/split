@@ -66,7 +66,7 @@ export function Dashboard() {
   }, 0);
 
   return (
-    <div className="space-y-6 pb-20">
+    <div className="space-y-6">
       <div className="text-center py-6">
         <h2 className="text-2xl font-bold text-gray-100">{group.name}</h2>
         <p className="text-gray-400">{group.members.length} members</p>

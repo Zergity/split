@@ -119,7 +119,7 @@ export function AddSettlement() {
   };
 
   return (
-    <div className="pb-20">
+    <div>
       <h2 className="text-xl font-bold mb-6">Record Settlement</h2>
 
       <form onSubmit={handleSubmit} className="space-y-6">

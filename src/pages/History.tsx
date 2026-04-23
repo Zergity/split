@@ -22,7 +22,7 @@ export function History() {
 
   if (!currentUser) {
     return (
-      <div className="pb-20">
+      <div>
         <h2 className="text-xl font-bold mb-6">History</h2>
         <div className="bg-yellow-900/30 border border-yellow-700 rounded-lg p-4 text-center">
           <p className="text-yellow-200">
@@ -47,7 +47,7 @@ export function History() {
   );
 
   return (
-    <div className="pb-20">
+    <div>
       <h2 className="text-xl font-bold mb-6">
         History ({sortedExpenses.length})
       </h2>

@@ -92,6 +92,28 @@ export async function updateAdmin(memberId: string, admin: boolean): Promise<Gro
   });
 }
 
+// --- Friends (direct-add candidates) ---
+
+export interface FriendCandidate {
+  userId: string;
+  name: string;
+  groupNames: string[];
+}
+
+export async function listFriends(): Promise<FriendCandidate[]> {
+  return fetchApi<FriendCandidate[]>('/groups/friends');
+}
+
+export async function addFriendToGroup(
+  userId: string,
+  displayName?: string,
+): Promise<Group> {
+  return fetchApi<Group>('/groups/members', {
+    method: 'POST',
+    body: JSON.stringify({ userId, displayName }),
+  });
+}
+
 // --- Invites ---
 
 export async function listInvites(): Promise<GroupInvite[]> {

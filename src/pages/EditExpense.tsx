@@ -401,7 +401,7 @@ export function EditExpense() {
   };
 
   return (
-    <div className="pb-20">
+    <div>
       <h2 className="text-xl font-bold mb-6">
         Edit Transaction {isPayer ? '(as Payer)' : isCreator ? '(as Creator)' : '(as Participant)'}
       </h2>

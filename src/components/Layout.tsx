@@ -10,14 +10,18 @@ interface LayoutProps {
 }
 
 export function Layout({ children }: LayoutProps) {
-  const { loading, error } = useApp();
+  const { loading, error, group } = useApp();
   const navigate = useNavigate();
   const location = useLocation();
 
-  const canGoBack = location.key !== 'default';
+  // The back button is a hardcoded "return to groups list" affordance —
+  // simpler than history-based nav, which gets confusing when users land
+  // deep via an invite link. Disabled on /groups itself (already there).
+  const onGroupsScreen = location.pathname === '/groups';
+  const headerTitle = onGroupsScreen ? 'Groups' : (group?.name ?? 'Splitter');
 
   const handleBack = () => {
-    navigate(-1);
+    navigate('/groups');
   };
 
   const handleReload = async () => {
@@ -80,9 +84,9 @@ export function Layout({ children }: LayoutProps) {
             <div className="flex items-center gap-1">
               <button
                 onClick={handleBack}
-                disabled={!canGoBack}
+                disabled={onGroupsScreen}
                 className="cursor-pointer p-2.5 text-gray-400 hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
-                aria-label="Go back"
+                aria-label="Back to groups"
               >
                 <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -98,10 +102,26 @@ export function Layout({ children }: LayoutProps) {
                 </svg>
               </button>
             </div>
-            <div className="flex items-center gap-2">
-              <img src="/logo.svg" alt="1Matrix" className="w-8 h-8" />
-              <h1 className="text-xl font-bold text-cyan-400">1Matrix</h1>
-            </div>
+            {onGroupsScreen ? (
+              // Index screen — signal "this is the list, not any one group":
+              // neutral grey, no logo emblem (the logo represents a specific group).
+              <div className="flex items-center gap-2">
+                <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 12h14M5 16h14" />
+                </svg>
+                <h1 className="text-lg font-semibold text-gray-200 tracking-wide">{headerTitle}</h1>
+              </div>
+            ) : (
+              <button
+                onClick={() => navigate('/groups')}
+                className="flex items-center gap-2 cursor-pointer hover:opacity-80 transition-opacity"
+                title="Switch group"
+                aria-label="Switch group"
+              >
+                <img src="/logo.svg" alt="" className="w-8 h-8" />
+                <h1 className="text-xl font-bold text-cyan-400">{headerTitle}</h1>
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <NotificationBell />
@@ -109,7 +129,7 @@ export function Layout({ children }: LayoutProps) {
           </div>
         </div>
       </header>
-      <main className="flex-1 max-w-4xl mx-auto w-full px-4 py-6">
+      <main className="flex-1 max-w-4xl mx-auto w-full px-4 pt-6 pb-24">
         {children}
       </main>
       <Navigation />

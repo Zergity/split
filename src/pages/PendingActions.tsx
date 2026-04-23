@@ -11,7 +11,7 @@ export function PendingActions() {
 
   if (!currentUser) {
     return (
-      <div className="pb-20">
+      <div>
         <h2 className="text-xl font-bold mb-6">Pending Actions</h2>
         <div className="bg-yellow-900/30 border border-yellow-700 rounded-lg p-4 text-center">
           <p className="text-yellow-200">
@@ -59,7 +59,7 @@ export function PendingActions() {
   }, 0);
 
   return (
-    <div className="pb-20 space-y-8">
+    <div className="space-y-8">
       {/* Incomplete section - only show if there are incomplete expenses */}
       {incomplete.length > 0 && (
         <section>

@@ -182,7 +182,7 @@ export function Expenses() {
   };
 
   return (
-    <div className="pb-20">
+    <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-xl font-bold">All Transactions</h2>
         <div className="flex gap-2">

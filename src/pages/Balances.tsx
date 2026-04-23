@@ -21,7 +21,7 @@ export function Balances() {
   const sortedBalances = [...balances].sort((a, b) => b.signedBalance - a.signedBalance);
 
   return (
-    <div className="pb-20 space-y-8">
+    <div className="space-y-8">
       <section>
         <h2 className="text-xl font-bold mb-4">Balances</h2>
 

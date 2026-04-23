@@ -11,6 +11,9 @@ import { History } from './pages/History';
 import { Balances } from './pages/Balances';
 import { AddSettlement } from './pages/AddSettlement';
 import { AcceptInvite } from './pages/AcceptInvite';
+import { GroupList } from './pages/GroupList';
+import { GroupManager } from './pages/GroupManager';
+import { CreateGroup } from './pages/CreateGroup';
 
 function App() {
   return (
@@ -27,6 +30,9 @@ function App() {
               <Route path="/history" element={<History />} />
               <Route path="/balances" element={<Balances />} />
               <Route path="/settle" element={<AddSettlement />} />
+              <Route path="/groups" element={<GroupList />} />
+              <Route path="/groups/new" element={<CreateGroup />} />
+              <Route path="/groups/:id/manage" element={<GroupManager />} />
               <Route path="/invite/:code" element={<AcceptInvite />} />
             </Routes>
           </Layout>
