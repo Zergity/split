@@ -7,6 +7,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ReceiptItem, ReceiptOCRResult, DiscountType } from '../types';
 import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal, parseDecimal } from '../utils/balances';
 import { YouBadge } from '../components/YouBadge';
+import { ShareControl } from '../components/ShareControl';
 
 export function AddExpense() {
   const navigate = useNavigate();
@@ -71,6 +72,12 @@ export function AddExpense() {
   const hasItems = items.length > 0;
 
   const totalShares = Object.values(memberShares).reduce((sum, s) => sum + s, 0);
+  // Reference share values for the −/+ smart-jump in shares mode: the unique
+  // configured shares across the group's active members, ascending.
+  const configuredShareValues = useMemo(() => {
+    if (!group) return [1];
+    return [...new Set(group.members.map((m) => m.share ?? 1))].sort((a, b) => a - b);
+  }, [group]);
   // "Split" when every included member's share equals their configured group
   // share (or 1 if unset) — i.e. nobody has overridden the admin-set weights.
   const allAtDefaultRates = Object.entries(memberShares).length > 0 &&
@@ -152,7 +159,10 @@ export function AddExpense() {
       });
       setMemberShares(shares);
     } else {
-      setMemberShares({});
+      // Keep memberShares in memory while in items mode — the user may toggle
+      // back and expect their manually-edited shares to still be there. The
+      // shares UI only renders entries for the currently selected members, so
+      // stale entries for deselected members are harmless.
       const placeholders: ReceiptItem[] = Array.from(selectedMemberIds).map(memberId => ({
         id: crypto.randomUUID(),
         description: '',
@@ -756,15 +766,11 @@ export function AddExpense() {
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-green-400 font-medium">{memberAmount.toLocaleString()}{group.currency}</span>
-                      <div className="flex items-center gap-1">
-                        <button type="button" disabled={share <= 1}
-                          onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: Math.max(1, prev[memberId] - 1) }))}
-                          className="w-7 h-7 flex items-center justify-center bg-gray-700 rounded-md text-white disabled:opacity-40">−</button>
-                        <span className="text-lg font-bold text-white min-w-[22px] text-center">{share}</span>
-                        <button type="button"
-                          onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: prev[memberId] + 1 }))}
-                          className="w-7 h-7 flex items-center justify-center bg-cyan-600 rounded-md text-white">+</button>
-                      </div>
+                      <ShareControl
+                        value={share}
+                        configuredValues={configuredShareValues}
+                        onChange={(v) => setMemberShares(prev => ({ ...prev, [memberId]: v }))}
+                      />
                     </div>
                   </div>
                 );

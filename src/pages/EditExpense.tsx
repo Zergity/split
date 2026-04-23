@@ -6,6 +6,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ReceiptItem, DiscountType } from '../types';
 import { roundNumber, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal, parseDecimal } from '../utils/balances';
 import { YouBadge } from '../components/YouBadge';
+import { ShareControl } from '../components/ShareControl';
 
 export function EditExpense() {
   const navigate = useNavigate();
@@ -87,6 +88,12 @@ export function EditExpense() {
   }, [billGoc, discount, discountType, splitMode]);
 
   const totalShares = Object.values(memberShares).reduce((sum, s) => sum + s, 0);
+  // Reference values for the −/+ smart-jump: unique configured shares on the
+  // group's members, ascending.
+  const configuredShareValues = useMemo(() => {
+    if (!group) return [1];
+    return [...new Set(group.members.map((m) => m.share ?? 1))].sort((a, b) => a - b);
+  }, [group]);
   // "Split" when every member's share equals their configured group share (or 1 if unset).
   const allAtDefaultRates = Object.entries(memberShares).length > 0 &&
     Object.entries(memberShares).every(([memberId, share]) => {
@@ -697,23 +704,13 @@ export function EditExpense() {
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-green-400 font-medium">{memberAmount.toLocaleString()}{group.currency}</span>
-                      {isPayer && (
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            disabled={share <= 1}
-                            onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: Math.max(1, prev[memberId] - 1) }))}
-                            className="w-7 h-7 flex items-center justify-center bg-gray-700 rounded-md text-white disabled:opacity-40"
-                          >−</button>
-                          <span className="text-lg font-bold text-white min-w-[22px] text-center">{share}</span>
-                          <button
-                            type="button"
-                            onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: prev[memberId] + 1 }))}
-                            className="w-7 h-7 flex items-center justify-center bg-cyan-600 rounded-md text-white"
-                          >+</button>
-                        </div>
-                      )}
-                      {!isPayer && (
+                      {isPayer ? (
+                        <ShareControl
+                          value={share}
+                          configuredValues={configuredShareValues}
+                          onChange={(v) => setMemberShares(prev => ({ ...prev, [memberId]: v }))}
+                        />
+                      ) : (
                         <span className="text-lg font-bold text-white min-w-[22px] text-center">{share}</span>
                       )}
                     </div>
