@@ -1,7 +1,54 @@
 import type { AuthEnv } from '../../types/auth';
-import { requireGroup } from '../../utils/session';
-import { softRemoveMember, findMember } from '../../utils/groups';
+import { requireGroup, requireGroupAdmin } from '../../utils/session';
+import { softRemoveMember, findMember, saveGroup } from '../../utils/groups';
 import { removeMembership } from '../../utils/users';
+
+// PATCH /api/groups/members/:id — admin edits per-member settings.
+// Currently only share (the "Split" weight). Rate of undefined/null
+// clears the override back to the implicit default of 1; values ≤0 are rejected.
+export const onRequestPatch: PagesFunction<AuthEnv> = async (context) => {
+  try {
+    const ctx = await requireGroupAdmin(context.env, context.request);
+    if (ctx instanceof Response) return ctx;
+    const { group } = ctx;
+    const memberId = context.params.id as string;
+
+    const target = findMember(group, memberId);
+    if (!target || target.removedAt) {
+      return Response.json({ success: false, error: 'Member not found' }, { status: 404 });
+    }
+
+    const body = await context.request.json() as { share?: number | null };
+
+    let nextRate = target.share;
+    if ('share' in body) {
+      const raw = body.share;
+      if (raw === null || raw === undefined) {
+        nextRate = undefined;
+      } else if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) {
+        return Response.json(
+          { success: false, error: 'share must be a positive number' },
+          { status: 400 }
+        );
+      } else {
+        nextRate = raw;
+      }
+    }
+
+    const updatedMembers = group.members.map((m) =>
+      m.id === memberId ? { ...m, share: nextRate } : m
+    );
+    const updated = { ...group, members: updatedMembers };
+    await saveGroup(context.env, updated);
+    return Response.json({ success: true, data: updated });
+  } catch (error) {
+    console.error('Update member error:', error);
+    return Response.json(
+      { success: false, error: 'Failed to update member' },
+      { status: 500 }
+    );
+  }
+};
 
 // DELETE /api/groups/members/:id
 // Admins can remove anyone; any member can remove themselves (leave the group).

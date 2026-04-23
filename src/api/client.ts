@@ -85,6 +85,18 @@ export async function removeMember(memberId: string): Promise<Group> {
   });
 }
 
+// Update per-member admin-controlled settings (share for now).
+// Passing `share: null` clears the override back to the implicit 1.
+export async function updateMemberSettings(
+  memberId: string,
+  updates: { share?: number | null },
+): Promise<Group> {
+  return fetchApi<Group>(`/groups/members/${encodeURIComponent(memberId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
 export async function updateAdmin(memberId: string, admin: boolean): Promise<Group> {
   return fetchApi<Group>('/groups/admins', {
     method: 'PUT',

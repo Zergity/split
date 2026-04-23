@@ -5,7 +5,7 @@ import { ReceiptCapture } from '../components/ReceiptCapture';
 import { ReceiptItems } from '../components/ReceiptItems';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ReceiptItem, ReceiptOCRResult, DiscountType } from '../types';
-import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal } from '../utils/balances';
+import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal, parseDecimal } from '../utils/balances';
 import { YouBadge } from '../components/YouBadge';
 
 export function AddExpense() {
@@ -71,7 +71,13 @@ export function AddExpense() {
   const hasItems = items.length > 0;
 
   const totalShares = Object.values(memberShares).reduce((sum, s) => sum + s, 0);
-  const allSharesEqual = totalShares > 0 && Object.values(memberShares).every(s => s === 1);
+  // "Split" when every included member's share equals their configured group
+  // share (or 1 if unset) — i.e. nobody has overridden the admin-set weights.
+  const allAtDefaultRates = Object.entries(memberShares).length > 0 &&
+    Object.entries(memberShares).every(([memberId, share]) => {
+      const rate = group?.members.find(m => m.id === memberId)?.share ?? 1;
+      return share === rate;
+    });
 
   const billGoc = useMemo(() => {
     if (splitMode !== 'items') return totalAmount;
@@ -106,7 +112,7 @@ export function AddExpense() {
 
   const handleTotalChange = (value: string) => {
     setHasManualTotal(true);
-    const parsed = parseFloat(value);
+    const parsed = parseDecimal(value);
     if (!isNaN(parsed) && parsed >= 0) {
       const newBillGoc = calculateBillGoc(parsed, discount, discountType);
       const currentBillGoc = items.reduce((sum, i) => sum + i.amount, 0);
@@ -140,7 +146,10 @@ export function AddExpense() {
       setHasManualTotal(false);
       setShowDiscountInput(false);
       const shares: Record<string, number> = {};
-      selectedMemberIds.forEach(id => { shares[id] = memberShares[id] ?? 1; });
+      selectedMemberIds.forEach(id => {
+        const rate = group?.members.find(m => m.id === id)?.share ?? 1;
+        shares[id] = memberShares[id] ?? rate;
+      });
       setMemberShares(shares);
     } else {
       setMemberShares({});
@@ -219,7 +228,12 @@ export function AddExpense() {
       });
       setMemberShares(prev => {
         const next = { ...prev };
-        if (isIncluded) delete next[memberId]; else next[memberId] = 1;
+        if (isIncluded) {
+          delete next[memberId];
+        } else {
+          const rate = group?.members.find(m => m.id === memberId)?.share ?? 1;
+          next[memberId] = rate;
+        }
         return next;
       });
       return;
@@ -578,13 +592,13 @@ export function AddExpense() {
           <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
             <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Total</span>
             <input
-              type="number"
+              type="text" inputMode="decimal"
               min="0"
               value={totalAmount || ''}
               onChange={(e) => {
                 if (splitMode === 'shares') {
                   setHasManualTotal(true);
-                  const parsed = parseFloat(e.target.value);
+                  const parsed = parseDecimal(e.target.value);
                   if (!isNaN(parsed) && parsed >= 0) {
                     setTotalAmount(parsed);
                   } else if (e.target.value === '' || e.target.value === '0') {
@@ -619,12 +633,12 @@ export function AddExpense() {
             <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden mt-2">
               <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Discount</span>
               <input
-                type="number"
+                type="text" inputMode="decimal"
                 min="0"
                 autoFocus
                 value={discount || ''}
                 onChange={(e) => {
-                  const raw = e.target.value ? parseFloat(e.target.value) : undefined;
+                  const raw = e.target.value ? parseDecimal(e.target.value) : undefined;
                   if (discountType === 'flat') {
                     setDiscount(raw && raw > 0 ? raw : undefined);
                   } else {
@@ -690,7 +704,7 @@ export function AddExpense() {
                   const rawTotal = items.reduce((sum, i) => sum + i.amount, 0);
                   const splitAmount = roundNumber(rawTotal / items.length, 2);
                   handleItemsChange(items.map(item => ({ ...item, amount: splitAmount })));
-                }} className="text-sm text-cyan-400 hover:text-cyan-300">Split equally</button>
+                }} className="text-sm text-cyan-400 hover:text-cyan-300">Split</button>
               )}
             </div>
             <ReceiptItems
@@ -720,7 +734,7 @@ export function AddExpense() {
             <div className="flex justify-between items-center mb-2">
               <label className="block text-sm font-medium text-gray-300">Shares</label>
               <span className="text-sm text-gray-500 italic">
-                {allSharesEqual ? 'All equal' : `Total: ${totalShares} shares`}
+                {allAtDefaultRates ? 'Split' : `Total: ${totalShares} shares`}
               </span>
             </div>
 

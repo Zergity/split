@@ -14,6 +14,9 @@ export interface Member {
   accountNo?: string;
   joinedAt?: string;
   removedAt?: string;
+  // Weight factor for the default "Split" method. Missing/≤0 treated as 1.
+  // Applied proportionally: Alice=2, Bob=1 → Alice pays 2/3, Bob pays 1/3.
+  share?: number;
 }
 
 // Bank information

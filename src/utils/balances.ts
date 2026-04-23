@@ -5,6 +5,13 @@ export function isDeleted(expense: Expense): boolean {
   return expense.tags?.includes('deleted') ?? false;
 }
 
+// parseFloat() only understands '.' as the decimal separator, but users on
+// comma-locale keyboards may still type ',' out of habit. Normalize first so
+// we accept both. Returns NaN on empty/invalid input.
+export function parseDecimal(raw: string): number {
+  return parseFloat(raw.replace(',', '.'));
+}
+
 export function calculateBalances(
   expenses: Expense[],
   members: Member[]

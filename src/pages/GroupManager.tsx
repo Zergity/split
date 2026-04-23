@@ -147,6 +147,29 @@ export function GroupManager() {
     }
   };
 
+  const handleRateChange = async (memberId: string, raw: string) => {
+    const trimmed = raw.trim();
+    // Empty input → clear the override; valid positive number → save; else ignore.
+    if (trimmed === '') {
+      const updated = await wrap(`rate-${memberId}`, () =>
+        api.updateMemberSettings(memberId, { share: null }),
+      );
+      if (updated) syncGroupLocal(updated);
+      return;
+    }
+    // Accept either '.' or ',' as the decimal separator — the input is now
+    // a text field (inputMode="decimal") so both may arrive.
+    const n = Number(trimmed.replace(',', '.'));
+    if (!Number.isFinite(n) || n <= 0) {
+      setError('Share must be a positive number');
+      return;
+    }
+    const updated = await wrap(`rate-${memberId}`, () =>
+      api.updateMemberSettings(memberId, { share: n }),
+    );
+    if (updated) syncGroupLocal(updated);
+  };
+
   const syncGroupLocal = (_updated: Group) => {
     // The server returns the updated group; refreshing reloads from source
     // of truth so members/admins/expenses all stay consistent.
@@ -182,13 +205,31 @@ export function GroupManager() {
       <section className="bg-gray-800 border border-gray-700 rounded-xl divide-y divide-gray-700">
         <div className="px-4 py-3">
           <h2 className="font-medium text-gray-100">Members</h2>
+          {isAdmin && (
+            <p className="text-xs text-gray-500 mt-0.5">
+              Share weights the "Split" method. Blank = 1 (equal).
+            </p>
+          )}
         </div>
         {group.members.map((m) => {
           const memberIsAdmin = group.admins.includes(m.id);
           const lastAdmin = memberIsAdmin && group.admins.length <= 1;
           const isMe = m.id === currentMember.id;
           return (
-            <div key={m.id} className="px-4 py-3 flex items-center gap-3">
+            <div key={m.id} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+              {/* Share input leftmost → fixed-width first column so the share
+                  columns line up vertically across all rows. `×` sits between
+                  the input and the name as the "times" sign (rate × member). */}
+              {isAdmin && (
+                <>
+                  <MemberRateInput
+                    member={m}
+                    busy={busy === `rate-${m.id}`}
+                    onCommit={(val) => handleRateChange(m.id, val)}
+                  />
+                  <span className="text-xs text-gray-500">×</span>
+                </>
+              )}
               <div className="flex-1 min-w-0">
                 <p className="text-gray-100 truncate">
                   {m.name}
@@ -361,5 +402,47 @@ export function GroupManager() {
         </button>
       </section>
     </div>
+  );
+}
+
+// Local-only state so the input shows the in-progress edit without flashing
+// back to the server value on each keystroke. Committed on blur / Enter.
+function MemberRateInput({
+  member,
+  busy,
+  onCommit,
+}: {
+  member: Member;
+  busy: boolean;
+  onCommit: (value: string) => void;
+}) {
+  const serverValue = member.share ?? '';
+  const [local, setLocal] = useState(String(serverValue));
+
+  // Sync if the server value changes for reasons other than our own edit.
+  useEffect(() => {
+    setLocal(String(serverValue));
+  }, [serverValue]);
+
+  const commit = () => {
+    if (local === String(serverValue)) return;
+    onCommit(local);
+  };
+
+  return (
+    <label className="flex items-center text-xs text-gray-400" title="Share">
+      <input
+        type="text" inputMode="decimal"
+        step="0.1"
+        min="0"
+        value={local}
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        disabled={busy}
+        placeholder="1"
+        className="w-14 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-gray-100 text-center disabled:opacity-50"
+      />
+    </label>
   );
 }

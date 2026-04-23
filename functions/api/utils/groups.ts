@@ -20,6 +20,8 @@ export interface GroupMember {
   accountNo?: string;
   joinedAt?: string;
   removedAt?: string;
+  // Weight for the "Split" method. Undefined/≤0 is treated as 1.
+  share?: number;
 }
 
 export interface GroupRecord {
