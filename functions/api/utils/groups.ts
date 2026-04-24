@@ -92,7 +92,13 @@ function needsPromotion(raw: any, expectedGroupId: string): boolean {
 }
 
 // Load a group by id. If the stored record is in legacy shape, promote it
-// once and write it back before returning. Returns null if no record exists.
+// in memory before returning. We deliberately do NOT write the promoted
+// record back from a read path: under concurrent reads interleaved with a
+// saveGroup, a stale reader could otherwise overwrite a just-written
+// mutation with the old promoted shape (a classic lost-update race). The
+// next saveGroup call from any mutation path will persist the new shape,
+// and reads in the meantime remain correct because promoteGroupShape is
+// idempotent. Returns null if no record exists.
 export async function getGroup(
   env: AuthEnv,
   groupId: string,
@@ -100,10 +106,7 @@ export async function getGroup(
   const raw = await env.SPLITTER_KV.get<any>(groupKey(groupId), 'json');
   if (!raw) return null;
   if (needsPromotion(raw, groupId)) {
-    const promoted = promoteGroupShape(raw, groupId);
-    await env.SPLITTER_KV.put(groupKey(groupId), JSON.stringify(promoted));
-    await ensureInIndex(env, groupId);
-    return promoted;
+    return promoteGroupShape(raw, groupId);
   }
   return raw as GroupRecord;
 }
