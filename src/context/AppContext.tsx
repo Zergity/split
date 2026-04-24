@@ -311,5 +311,3 @@ export function useApp() {
   }
   return context;
 }
-
-export { LEGACY_GROUP_ID };
