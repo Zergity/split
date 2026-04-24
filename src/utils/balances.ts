@@ -85,18 +85,27 @@ export function calculateBalances(
 }
 
 export function calculateSettlements(balances: MemberBalance[]): Settlement[] {
+  // Work in integer cents. The previous implementation subtracted floats in
+  // a loop, so across long chains of small amounts the cumulative drift
+  // could leave a penny on the table or cause the advance-index checks
+  // (`< 0.01`) to fire on the wrong iteration. Rounding to cents up front
+  // and subtracting integers eliminates both.
+  const CENTS = 100;
+  const toCents = (n: number) => Math.round(n * CENTS);
+
   const settlements: Settlement[] = [];
 
-  // Create mutable copies - use signedBalance only
   const debtors = balances
-    .filter((b) => b.signedBalance < -0.01)
-    .map((b) => ({ ...b, amount: Math.abs(b.signedBalance) }))
-    .sort((a, b) => b.amount - a.amount);
+    .filter((b) => b.signedBalance < 0)
+    .map((b) => ({ ...b, cents: -toCents(b.signedBalance) }))
+    .filter((b) => b.cents > 0)
+    .sort((a, b) => b.cents - a.cents);
 
   const creditors = balances
-    .filter((b) => b.signedBalance > 0.01)
-    .map((b) => ({ ...b, amount: b.signedBalance }))
-    .sort((a, b) => b.amount - a.amount);
+    .filter((b) => b.signedBalance > 0)
+    .map((b) => ({ ...b, cents: toCents(b.signedBalance) }))
+    .filter((b) => b.cents > 0)
+    .sort((a, b) => b.cents - a.cents);
 
   let debtorIdx = 0;
   let creditorIdx = 0;
@@ -105,23 +114,23 @@ export function calculateSettlements(balances: MemberBalance[]): Settlement[] {
     const debtor = debtors[debtorIdx];
     const creditor = creditors[creditorIdx];
 
-    const settleAmount = Math.min(debtor.amount, creditor.amount);
+    const settleCents = Math.min(debtor.cents, creditor.cents);
 
-    if (settleAmount > 0.01) {
+    if (settleCents > 0) {
       settlements.push({
         from: debtor.memberId,
         fromName: debtor.memberName,
         to: creditor.memberId,
         toName: creditor.memberName,
-        amount: Math.round(settleAmount * 100) / 100,
+        amount: settleCents / CENTS,
       });
     }
 
-    debtor.amount -= settleAmount;
-    creditor.amount -= settleAmount;
+    debtor.cents -= settleCents;
+    creditor.cents -= settleCents;
 
-    if (debtor.amount < 0.01) debtorIdx++;
-    if (creditor.amount < 0.01) creditorIdx++;
+    if (debtor.cents === 0) debtorIdx++;
+    if (creditor.cents === 0) creditorIdx++;
   }
 
   return settlements;
