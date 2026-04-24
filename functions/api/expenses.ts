@@ -27,7 +27,12 @@ async function sendExpenseNotification(
   action: 'added' | 'updated',
 ): Promise<void> {
   const involved = new Set<string>();
-  for (const split of expense.splits) involved.add(split.memberId);
+  if (expense.splitType === 'group') {
+    // Group-mode persists no splits; everyone currently in the group is on the hook.
+    for (const m of group.members) involved.add(m.id);
+  } else {
+    for (const split of expense.splits) involved.add(split.memberId);
+  }
   involved.add(expense.paidBy);
 
   const creatorId = expense.createdBy ?? expense.paidBy;
@@ -85,22 +90,32 @@ async function sendExpenseNotification(
       }
     } else {
       const payerName = getMemberName(group, expense.paidBy);
-      const splitsDetail = expense.splits
-        .map((s) => `  • ${getMemberName(group, s.memberId)}: ${formatAmount(s.amount, currency)}`)
-        .join('\n');
-      const userIds = memberIdsToUserIds(group, expense.splits.map((s) => s.memberId));
+      const isGroupMode = expense.splitType === 'group';
+      const splitsDetail = isGroupMode
+        ? `  • Split across the whole group (${group.members.length} member${group.members.length === 1 ? '' : 's'})`
+        : expense.splits
+            .map((s) => `  • ${getMemberName(group, s.memberId)}: ${formatAmount(s.amount, currency)}`)
+            .join('\n');
+      const memberIds = isGroupMode
+        ? group.members.map((m) => m.id)
+        : expense.splits.map((s) => s.memberId);
+      const userIds = memberIdsToUserIds(group, memberIds);
       const excludeUserId = findMember(group, creatorId)?.userId ?? '';
+      // Group-mode doesn't require per-member sign-off, so omit the confirm button.
+      const replyMarkup = isGroupMode
+        ? undefined
+        : {
+            inline_keyboard: [
+              [{ text: '✅ Confirm', callback_data: `signoff:${group.id}:${expense.id}` }],
+            ],
+          };
       await notifyTelegram(
         userIds,
         excludeUserId,
         'newExpense',
         `💸 <b>New expense</b>\n\n📌 ${expense.description}\n👤 Paid by: <b>${payerName}</b>\n💰 Total: <b>${formatAmount(expense.amount, currency)}</b>\n\n<b>Each member's share:</b>\n${splitsDetail}`,
         env,
-        {
-          inline_keyboard: [
-            [{ text: '✅ Confirm', callback_data: `signoff:${group.id}:${expense.id}` }],
-          ],
-        },
+        replyMarkup,
       );
     }
   } catch (err) {

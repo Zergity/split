@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Expense, Member } from '../types';
-import { calculateBillGoc, calculateDiscountAmount, formatCurrency, formatRelativeTime, getTagColor, isDeleted } from '../utils/balances';
+import { calculateBillGoc, calculateDiscountAmount, formatCurrency, formatRelativeTime, getTagColor, isDeleted, isGroupAccepted } from '../utils/balances';
 import { SignOffButton } from './SignOffButton';
 import { useApp } from '../context/AppContext';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -62,7 +62,12 @@ export function ExpenseCard({
 
   const payer = members.find((m) => m.id === expense.paidBy);
   const creator = members.find((m) => m.id === expense.createdBy);
-  const allSigned = expense.splits.every((s) => s.signedOff);
+  const isGroupMode = expense.splitType === 'group';
+  // For group-mode the whole expense flips to "Accepted" once > 50% of active
+  // members have signed off. For other types, every split must be signed.
+  const allSigned = isGroupMode
+    ? isGroupAccepted(expense, members)
+    : expense.splits.every((s) => s.signedOff);
   const isSettlement = expense.splitType === 'settlement';
   const expenseDeleted = isDeleted(expense);
 
@@ -134,7 +139,12 @@ export function ExpenseCard({
             </>
           ) : (
             <>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {isGroupMode && (
+                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-amber-400 text-gray-900">
+                    Group
+                  </span>
+                )}
                 <h3 className="font-medium text-gray-100">{expense.description}</h3>
                 {canEdit && (
                   <Link
@@ -393,12 +403,30 @@ export function ExpenseCard({
                 onClick={() => setExpanded(false)}
               >
                 <p className="text-xs text-gray-500">
-                  Split ({expense.splitType === 'shares' ? 'by shares' : expense.splitType})
-                  {expense.splitType !== 'shares' && expense.discount && (
+                  Split ({
+                    expense.splitType === 'shares' ? 'by shares' :
+                    expense.splitType === 'group' ? 'across whole group' :
+                    expense.splitType
+                  })
+                  {expense.splitType !== 'shares' && expense.splitType !== 'group' && expense.discount && (
                     <span className="ml-1">
                       · −{formatCurrency(calculateDiscountAmount(expense.discount, expense.discountType, calculateBillGoc(expense.amount, expense.discount, expense.discountType)), currency)}
                     </span>
                   )}
+                  {expense.splitType === 'group' && (() => {
+                    const active = members.filter((m) => !m.removedAt);
+                    const activeIds = new Set(active.map((m) => m.id));
+                    let signed = 0;
+                    for (const entry of expense.signedOffBy ?? []) {
+                      if (activeIds.has(entry.memberId)) signed++;
+                    }
+                    const threshold = Math.floor(active.length / 2) + 1;
+                    return (
+                      <span className="ml-1">
+                        · {signed}/{active.length} signed (accepted at {threshold})
+                      </span>
+                    );
+                  })()}
                 </p>
                 <svg className="w-4 h-4 text-cyan-500 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />

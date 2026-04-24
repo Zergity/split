@@ -1,8 +1,67 @@
-import { Expense, Member, MemberBalance, Settlement, DiscountType } from '../types';
+import { Expense, ExpenseSplit, Member, MemberBalance, Settlement, DiscountType } from '../types';
 
 // Check if an expense is soft-deleted
 export function isDeleted(expense: Expense): boolean {
   return expense.tags?.includes('deleted') ?? false;
+}
+
+// Group-mode expenses persist an empty splits array; the per-member breakdown
+// is re-derived from the current member list and share weights every time
+// the expense is read. That way adding/removing a member, or adjusting a
+// share, retroactively re-weights every past group expense — which is the
+// whole point of the mode.
+//
+// Sign-off is tracked out-of-band on expense.signedOffBy (a member-id ledger)
+// so personal acceptance isn't lost when splits are recomputed. Each
+// hydrated split's signedOff reflects whether *that member* personally
+// signed — this is what drives the "pending actions" list. The aggregate
+// "transaction accepted" state (> 50% of active members) is computed via
+// isGroupAccepted and affects balance settlement atomically.
+//
+// Non-group expenses pass through unchanged.
+export function resolveExpenseSplits(
+  expense: Expense,
+  members: Member[],
+): ExpenseSplit[] {
+  if (expense.splitType !== 'group') return expense.splits;
+  const active = members.filter((m) => !m.removedAt);
+  if (active.length === 0) return [];
+  const entries: [string, number][] = active.map((m) => [
+    m.id,
+    m.share && m.share > 0 ? m.share : 1,
+  ]);
+  const distributed = distributeByShares(expense.amount, entries, 2);
+  const ledger = new Map<string, string>();
+  for (const entry of expense.signedOffBy ?? []) {
+    ledger.set(entry.memberId, entry.signedAt);
+  }
+  return entries.map(([memberId, value]) => {
+    const ledgerSignedAt = ledger.get(memberId);
+    return {
+      memberId,
+      value,
+      amount: distributed.get(memberId) ?? 0,
+      signedOff: ledgerSignedAt !== undefined,
+      signedAt: ledgerSignedAt,
+    };
+  });
+}
+
+// True when > 50% of the group's active members have personally signed off
+// on the given group-mode expense. Always false for non-group expenses.
+export function isGroupAccepted(
+  expense: Expense,
+  members: Member[],
+): boolean {
+  if (expense.splitType !== 'group') return false;
+  const active = members.filter((m) => !m.removedAt);
+  if (active.length === 0) return false;
+  const activeIds = new Set(active.map((m) => m.id));
+  let signed = 0;
+  for (const entry of expense.signedOffBy ?? []) {
+    if (activeIds.has(entry.memberId)) signed++;
+  }
+  return signed * 2 > active.length;
 }
 
 // parseFloat() only understands '.' as the decimal separator, but users on
@@ -51,6 +110,17 @@ export function calculateBalances(
   // Filter out deleted expenses from balance calculations
   const activeExpenses = expenses.filter((e) => !isDeleted(e));
 
+  // Group-mode expenses are accepted atomically once > 50% of active members
+  // sign off — until then the whole transaction stays pending (even for the
+  // members who have personally signed). Cache the acceptance state per
+  // expense so we don't recompute it per split below.
+  const isGroupAcceptedMap = new Map<string, boolean>();
+  for (const expense of activeExpenses) {
+    if (expense.splitType === 'group') {
+      isGroupAcceptedMap.set(expense.id, isGroupAccepted(expense, members));
+    }
+  }
+
   activeExpenses.forEach((expense) => {
     // Calculate unassigned amount from items - this goes to payer's PENDING balance
     const unassignedAmount = expense.items
@@ -64,15 +134,21 @@ export function calculateBalances(
     let payerSignedCredit = 0;
     let payerPendingCredit = 0;
 
+    const isGroup = expense.splitType === 'group';
+    const groupAccepted = isGroup ? isGroupAcceptedMap.get(expense.id) ?? false : false;
+
     expense.splits.forEach((split) => {
       if (split.memberId !== expense.paidBy) {
+        // Group-mode: split membership in signed vs pending is atomic based
+        // on the > 50% acceptance threshold. Non-group: per-member signedOff.
+        const goesToSigned = isGroup ? groupAccepted : split.signedOff;
         // Participant: owes their split amount
-        const map = split.signedOff ? signedMap : pendingMap;
+        const map = goesToSigned ? signedMap : pendingMap;
         const currentBalance = map.get(split.memberId) || 0;
         map.set(split.memberId, currentBalance - split.amount);
 
         // Payer gets credit for this - goes to signed or pending based on THIS participant's status
-        if (split.signedOff) {
+        if (goesToSigned) {
           payerSignedCredit += split.amount;
         } else {
           payerPendingCredit += split.amount;

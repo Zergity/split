@@ -52,7 +52,12 @@ async function sendEditNotification(
   action: 'updated' | 'removed',
 ): Promise<void> {
   const involved = new Set<string>();
-  for (const split of expense.splits) involved.add(split.memberId);
+  if (expense.splitType === 'group') {
+    // Group-mode has no persisted splits; loop current members.
+    for (const m of group.members) involved.add(m.id);
+  } else {
+    for (const split of expense.splits) involved.add(split.memberId);
+  }
   involved.add(expense.paidBy);
   if (editorMemberId) involved.delete(editorMemberId);
   if (involved.size === 0) return;

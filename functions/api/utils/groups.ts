@@ -171,8 +171,10 @@ export function isAdmin(group: GroupRecord, memberId: string): boolean {
 
 // --- Expenses ---
 
-export type SplitType = 'equal' | 'exact' | 'percentage' | 'shares' | 'settlement';
-export const SPLIT_TYPES: SplitType[] = ['equal', 'exact', 'percentage', 'shares', 'settlement'];
+// 'group': splits across all current group members by share weight, resolved
+// dynamically at read time. splits[] is persisted empty.
+export type SplitType = 'equal' | 'exact' | 'percentage' | 'shares' | 'settlement' | 'group';
+export const SPLIT_TYPES: SplitType[] = ['equal', 'exact', 'percentage', 'shares', 'settlement', 'group'];
 
 export interface ExpenseSplit {
   memberId: string;
@@ -180,6 +182,11 @@ export interface ExpenseSplit {
   amount: number;
   signedOff: boolean;
   signedAt?: string;
+}
+
+export interface GroupSignOff {
+  memberId: string;
+  signedAt: string;
 }
 
 export interface Expense {
@@ -190,6 +197,8 @@ export interface Expense {
   createdBy?: string;
   splitType: SplitType;
   splits: ExpenseSplit[];
+  // Sign-off ledger for group-mode expenses.
+  signedOffBy?: GroupSignOff[];
   createdAt: string;
   receiptUrl?: string;
   receiptDate?: string;
@@ -239,6 +248,31 @@ export function validateExpenseInput(
   }
   if (typeof input.paidBy !== 'string' || !findMember(group, input.paidBy)) {
     return 'paidBy must reference a member of this group';
+  }
+  // Group-mode: splits are computed on read from current members + share
+  // weights. We persist an empty array and validate the sign-off ledger
+  // instead. The ledger lists members who have personally accepted the
+  // transaction; when > 50% of active members are on it, the expense is
+  // considered group-accepted.
+  if (input.splitType === 'group') {
+    if (!Array.isArray(input.splits)) {
+      return 'splits must be an array';
+    }
+    if (input.signedOffBy !== undefined) {
+      if (!Array.isArray(input.signedOffBy)) {
+        return 'signedOffBy must be an array';
+      }
+      for (const entry of input.signedOffBy) {
+        if (!entry || typeof entry !== 'object') return 'signedOffBy entry is invalid';
+        if (typeof entry.memberId !== 'string' || !findMember(group, entry.memberId)) {
+          return 'signedOffBy memberId must reference a member of this group';
+        }
+        if (typeof entry.signedAt !== 'string') {
+          return 'signedOffBy signedAt must be a string';
+        }
+      }
+    }
+    return null;
   }
   if (!Array.isArray(input.splits) || input.splits.length === 0) {
     return 'splits must be a non-empty array';

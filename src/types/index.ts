@@ -61,7 +61,12 @@ export interface GroupInvite {
 }
 
 // Split types
-export type SplitType = 'equal' | 'exact' | 'percentage' | 'shares' | 'settlement';
+// 'group': splits the whole amount across all current group members using each
+// member's configured share weight. No per-member splits are persisted —
+// shares are recalculated on read from the current member list, so adding /
+// removing members or changing share weights automatically re-weights past
+// group spending.
+export type SplitType = 'equal' | 'exact' | 'percentage' | 'shares' | 'settlement' | 'group';
 
 // Discount types
 export type DiscountType = 'percentage' | 'flat';
@@ -76,6 +81,14 @@ export interface ExpenseSplit {
   previousAmount?: number; // stored when amount changes and needs re-sign-off
 }
 
+// Sign-off record used by group-mode expenses, where per-member splits are
+// derived dynamically. Tracks who has personally accepted the transaction;
+// the "accepted" status flips once > 50% of active members are in this list.
+export interface GroupSignOff {
+  memberId: string;
+  signedAt: string;
+}
+
 // Expense with sign-off tracking
 export interface Expense {
   id: string;
@@ -85,6 +98,9 @@ export interface Expense {
   createdBy: string; // member id who created the expense
   splitType: SplitType;
   splits: ExpenseSplit[];
+  // Sign-off ledger for group-mode expenses (splits are computed on read, so
+  // signedOff cannot live on each split). Empty/absent on non-group expenses.
+  signedOffBy?: GroupSignOff[];
   items?: ReceiptItem[]; // stored items for editing later
   discount?: number; // percentage value OR flat amount, depending on discountType
   discountType?: DiscountType; // default 'percentage' for backward compat

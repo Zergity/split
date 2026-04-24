@@ -257,6 +257,19 @@ export async function signOffExpense(
   expense: Expense,
   memberId: string,
 ): Promise<Expense> {
+  // Group-mode: sign-offs live on a separate ledger (splits are ephemeral,
+  // recomputed from the current member list on each read). Append to the
+  // ledger instead of trying to mutate the computed splits.
+  if (expense.splitType === 'group') {
+    const ledger = expense.signedOffBy ?? [];
+    if (ledger.some((entry) => entry.memberId === memberId)) return expense;
+    const updatedLedger = [
+      ...ledger,
+      { memberId, signedAt: new Date().toISOString() },
+    ];
+    return updateExpense(expense.id, { signedOffBy: updatedLedger });
+  }
+
   const updatedSplits = expense.splits.map((split) => {
     if (split.memberId === memberId && !split.signedOff) {
       return {

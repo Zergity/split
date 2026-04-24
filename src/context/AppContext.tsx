@@ -11,6 +11,7 @@ import {
 import { Group, GroupSummary, Expense, Member } from '../types';
 import * as api from '../api/client';
 import { LEGACY_GROUP_ID, getActiveGroupId, setActiveGroupId, ApiError } from '../api/client';
+import { resolveExpenseSplits } from '../utils/balances';
 
 interface AppContextType {
   activeGroupId: string;
@@ -47,7 +48,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeGroupId, setActiveGroupIdState] = useState<string>(getActiveGroupId());
   const [groups, setGroups] = useState<GroupSummary[]>([]);
   const [group, setGroup] = useState<Group | null>(null);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [rawExpenses, setExpenses] = useState<Expense[]>([]);
+  // Group-mode expenses have dynamic splits — we hydrate them from the current
+  // member list here so every downstream consumer (balances, charts, cards)
+  // reads through expense.splits without caring whether it was persisted or
+  // computed. When a member is added/removed or a share weight changes, this
+  // memo re-runs and past group expenses automatically re-weight.
+  const expenses = useMemo<Expense[]>(() => {
+    if (!group) return rawExpenses;
+    return rawExpenses.map((e) =>
+      e.splitType === 'group'
+        ? { ...e, splits: resolveExpenseSplits(e, group.members) }
+        : e,
+    );
+  }, [rawExpenses, group]);
   const [currentUser, setCurrentUserState] = useState<Member | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);

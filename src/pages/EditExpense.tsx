@@ -24,11 +24,11 @@ export function EditExpense() {
   const [showDiscountInput, setShowDiscountInput] = useState(false);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [receiptDate, setReceiptDate] = useState<string>('');
-  const [pendingModeSwitch, setPendingModeSwitch] = useState<'items' | 'shares' | null>(null);
+  const [pendingModeSwitch, setPendingModeSwitch] = useState<'items' | 'shares' | 'group' | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [splitMode, setSplitMode] = useState<'items' | 'shares'>('items');
+  const [splitMode, setSplitMode] = useState<'items' | 'shares' | 'group'>('items');
   const [memberShares, setMemberShares] = useState<Record<string, number>>({});
 
   // Initialize form with existing expense data
@@ -42,7 +42,9 @@ export function EditExpense() {
       setReceiptDate(expense.receiptDate ?? expense.createdAt);
       if (expense.discount) setShowDiscountInput(true);
 
-      if (expense.splitType === 'shares') {
+      if (expense.splitType === 'group') {
+        setSplitMode('group');
+      } else if (expense.splitType === 'shares') {
         setSplitMode('shares');
         const shares: Record<string, number> = {};
         for (const split of expense.splits) {
@@ -346,6 +348,11 @@ export function EditExpense() {
           return;
         }
       }
+    } else if (splitMode === 'group') {
+      if (totalAmount <= 0) {
+        setError('Total amount must be greater than 0');
+        return;
+      }
     } else {
       if (totalAmount <= 0) {
         setError('Total amount must be greater than 0');
@@ -360,6 +367,20 @@ export function EditExpense() {
     setSubmitting(true);
 
     try {
+      if (splitMode === 'group') {
+        // Group-mode edits never touch splits (they're computed on read) or
+        // the sign-off ledger (member acceptance is independent of edits).
+        await updateExpense(expense.id, {
+          description: description.trim(),
+          amount: totalAmount,
+          paidBy,
+          splitType: 'group',
+          splits: [],
+          receiptDate: receiptDate || undefined,
+        });
+        navigate('/expenses');
+        return;
+      }
       if (splitMode === 'items') {
         const memberTotals = calculateSplits();
         const oldSplitsMap = new Map(expense.splits.map((s) => [s.memberId, s]));
@@ -538,7 +559,7 @@ export function EditExpense() {
         </div>
 
         {/* 4. Split between - member chips */}
-        {!canOnlyEditOwnItems && (
+        {!canOnlyEditOwnItems && splitMode !== 'group' && (
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
               Split between
@@ -670,13 +691,15 @@ export function EditExpense() {
             <button
               type="button"
               onClick={() => {
-                if (splitMode === 'shares') {
-                  if (Object.keys(memberShares).length > 0) { setPendingModeSwitch('items'); return; }
-                  setMemberShares({});
-                  setDiscount(undefined);
-                  setDiscountType('percentage');
-                  setSplitMode('items');
+                if (splitMode === 'items') return;
+                if (splitMode === 'shares' && Object.keys(memberShares).length > 0) {
+                  setPendingModeSwitch('items');
+                  return;
                 }
+                setMemberShares({});
+                setDiscount(undefined);
+                setDiscountType('percentage');
+                setSplitMode('items');
               }}
               className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
                 splitMode === 'items'
@@ -689,13 +712,15 @@ export function EditExpense() {
             <button
               type="button"
               onClick={() => {
-                if (splitMode === 'items') {
-                  if (items.length > 0) { setPendingModeSwitch('shares'); return; }
-                  setItems([]);
-                  setDiscount(undefined);
-                  setDiscountType('percentage');
-                  setSplitMode('shares');
+                if (splitMode === 'shares') return;
+                if (splitMode === 'items' && items.length > 0) {
+                  setPendingModeSwitch('shares');
+                  return;
                 }
+                setItems([]);
+                setDiscount(undefined);
+                setDiscountType('percentage');
+                setSplitMode('shares');
               }}
               className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
                 splitMode === 'shares'
@@ -705,11 +730,47 @@ export function EditExpense() {
             >
               Shares
             </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (splitMode === 'group') return;
+                if (splitMode === 'items' && items.length > 0) {
+                  setPendingModeSwitch('group');
+                  return;
+                }
+                if (splitMode === 'shares' && Object.keys(memberShares).length > 0) {
+                  setPendingModeSwitch('group');
+                  return;
+                }
+                setItems([]);
+                setMemberShares({});
+                setDiscount(undefined);
+                setDiscountType('percentage');
+                setSplitMode('group');
+              }}
+              className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
+                splitMode === 'group'
+                  ? 'bg-cyan-600 text-white font-semibold'
+                  : 'text-gray-500'
+              }`}
+            >
+              Group
+            </button>
           </div>
         )}
 
         {/* 8. Split details */}
-        {splitMode === 'items' ? (
+        {splitMode === 'group' ? (
+          <div className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-300">
+            <p className="font-medium text-gray-100 mb-1">
+              Split across the whole group ({group.members.length} member{group.members.length === 1 ? '' : 's'})
+            </p>
+            <p className="text-xs text-gray-500">
+              Shares are recalculated from current members and their share
+              weights. Accepted once more than 50% of members sign off.
+            </p>
+          </div>
+        ) : splitMode === 'items' ? (
           <div>
             <div className="flex justify-between items-center mb-2">
               <label className="block text-sm font-medium text-gray-300">Amounts</label>
@@ -816,7 +877,9 @@ export function EditExpense() {
               submitting ||
               (splitMode === 'items'
                 ? items.length === 0
-                : Object.keys(memberShares).length === 0 || totalAmount <= 0)
+                : splitMode === 'group'
+                  ? totalAmount <= 0
+                  : Object.keys(memberShares).length === 0 || totalAmount <= 0)
             }
             className="flex-1 bg-cyan-600 text-white py-3 rounded-lg font-medium hover:bg-cyan-700 disabled:opacity-50"
           >
@@ -827,12 +890,28 @@ export function EditExpense() {
 
       <ConfirmDialog
         open={pendingModeSwitch !== null}
-        title={pendingModeSwitch === 'shares' ? 'Switch to Shares' : 'Switch to Items'}
-        message={pendingModeSwitch === 'shares' ? 'Your items will be cleared. This cannot be undone.' : 'Your shares will be cleared. This cannot be undone.'}
+        title={
+          pendingModeSwitch === 'shares' ? 'Switch to Shares' :
+          pendingModeSwitch === 'group' ? 'Switch to Group' :
+          'Switch to Items'
+        }
+        message={
+          pendingModeSwitch === 'group'
+            ? 'Your current split configuration will be cleared. This cannot be undone.'
+            : pendingModeSwitch === 'shares'
+              ? 'Your items will be cleared. This cannot be undone.'
+              : 'Your shares will be cleared. This cannot be undone.'
+        }
         confirmLabel="Clear & Switch"
         destructive
         onConfirm={() => {
-          if (pendingModeSwitch === 'items') {
+          if (pendingModeSwitch === 'group') {
+            setItems([]);
+            setMemberShares({});
+            setDiscount(undefined);
+            setDiscountType('percentage');
+            setSplitMode('group');
+          } else if (pendingModeSwitch === 'items') {
             const placeholders: ReceiptItem[] = Object.keys(memberShares).map(memberId => ({
               id: crypto.randomUUID(),
               description: '',

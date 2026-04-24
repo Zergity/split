@@ -29,10 +29,10 @@ export function AddExpense() {
   const [tagInput, setTagInput] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
 
-  const [splitMode, setSplitMode] = useState<'items' | 'shares'>('items');
+  const [splitMode, setSplitMode] = useState<'items' | 'shares' | 'group'>('items');
   const [selectedMemberIds, setSelectedMemberIds] = useState<Set<string>>(new Set());
   const [memberShares, setMemberShares] = useState<Record<string, number>>({});
-  const [pendingModeSwitch, setPendingModeSwitch] = useState<'items' | 'shares' | null>(null);
+  const [pendingModeSwitch, setPendingModeSwitch] = useState<'items' | 'shares' | 'group' | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -150,7 +150,7 @@ export function AddExpense() {
     }
   };
 
-  const executeModeSwitch = (mode: 'items' | 'shares') => {
+  const executeModeSwitch = (mode: 'items' | 'shares' | 'group') => {
     if (mode === 'shares') {
       setItems([]);
       setDiscount(undefined);
@@ -163,6 +163,15 @@ export function AddExpense() {
         shares[id] = memberShares[id] ?? rate;
       });
       setMemberShares(shares);
+    } else if (mode === 'group') {
+      // Group mode: no per-member config — the whole group is always the
+      // participant, resolved at read time. Clear anything mode-specific.
+      setItems([]);
+      setDiscount(undefined);
+      setDiscountType('percentage');
+      setHasManualTotal(false);
+      setShowDiscountInput(false);
+      setMemberShares({});
     } else {
       // Keep memberShares in memory while in items mode — the user may toggle
       // back and expect their manually-edited shares to still be there. The
@@ -180,9 +189,12 @@ export function AddExpense() {
     setPendingModeSwitch(null);
   };
 
-  const handleSplitModeChange = (mode: 'items' | 'shares') => {
+  const handleSplitModeChange = (mode: 'items' | 'shares' | 'group') => {
     if (mode === splitMode) return;
-    const needsConfirm = mode === 'shares' ? hasItems : Object.keys(memberShares).length > 0;
+    const needsConfirm =
+      mode === 'shares' ? hasItems :
+      mode === 'group' ? (hasItems || Object.keys(memberShares).length > 0) :
+      Object.keys(memberShares).length > 0;
     if (needsConfirm) {
       setPendingModeSwitch(mode);
     } else {
@@ -343,6 +355,9 @@ export function AddExpense() {
           return;
         }
       }
+    } else if (splitMode === 'group') {
+      if (totalAmount <= 0) { setError('Total amount must be greater than 0'); return; }
+      if (group.members.length === 0) { setError('Group has no members'); return; }
     } else {
       if (totalAmount <= 0) { setError('Total amount must be greater than 0'); return; }
       if (selectedMemberIds.size === 0) { setError('Add at least one member'); return; }
@@ -391,6 +406,24 @@ export function AddExpense() {
           createdBy: currentUser.id, splitType: 'exact', splits,
           items, discount,
           discountType: discount ? discountType : undefined,
+          tags: tags.length > 0 ? tags : undefined, receiptDate,
+        });
+      } else if (splitMode === 'group') {
+        // Group mode: persist an empty splits[] — the breakdown is derived
+        // from the current members + share weights every time the expense
+        // is read, so past entries re-weight when the group changes.
+        // The payer and creator auto-sign-off (they're obviously aware of
+        // the transaction); remaining members accept via the normal flow,
+        // and the expense is "accepted" once > 50% have signed.
+        const now = new Date().toISOString();
+        const signedOffBy = [{ memberId: paidBy, signedAt: now }];
+        if (currentUser.id !== paidBy) {
+          signedOffBy.push({ memberId: currentUser.id, signedAt: now });
+        }
+        await createExpense({
+          description: description.trim(), amount: totalAmount, paidBy,
+          createdBy: currentUser.id, splitType: 'group', splits: [],
+          signedOffBy,
           tags: tags.length > 0 ? tags : undefined, receiptDate,
         });
       } else {
@@ -592,60 +625,62 @@ export function AddExpense() {
           </select>
         </div>
 
-        <div>
-          <div className="flex justify-between items-center mb-2">
-            <label className="block text-sm font-medium text-gray-300">
-              Split between
-            </label>
-            {hasItems && (
+        {splitMode !== 'group' && (
+          <div>
+            <div className="flex justify-between items-center mb-2">
+              <label className="block text-sm font-medium text-gray-300">
+                Split between
+              </label>
+              {hasItems && (
+                <button
+                  type="button"
+                  onClick={handleClearReceipt}
+                  className="text-sm text-red-400 hover:text-red-300"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={handleClearReceipt}
-                className="text-sm text-red-400 hover:text-red-300"
+                onClick={handleToggleAll}
+                className={`px-3 py-1.5 rounded-full text-sm select-none transition-colors ${
+                  allMembersSelected
+                    ? 'bg-cyan-700 text-white hover:bg-red-500 font-semibold'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
               >
-                Clear all
+                All
               </button>
-            )}
+              {group.members.map((member) => {
+                const isIncluded = includedMemberIds.has(member.id);
+                const isYou = currentUser && member.id === currentUser.id;
+                return (
+                  <div
+                    key={member.id}
+                    draggable
+                    onClick={() => handleMemberTap(member.id)}
+                    onDragStart={(e) => handleMemberDragStart(e, member.id)}
+                    className={`px-3 py-1.5 rounded-full text-sm cursor-grab active:cursor-grabbing select-none transition-colors ${
+                      isIncluded
+                        ? 'bg-cyan-600 text-white hover:bg-red-500'
+                        : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                    }`}
+                  >
+                    {member.name}{isYou && <> <YouBadge /></>}
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              {splitMode === 'items'
+                ? 'Drag to items or "+ Add item" below'
+                : 'Tap to add/remove from expense'}
+            </p>
           </div>
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={handleToggleAll}
-              className={`px-3 py-1.5 rounded-full text-sm select-none transition-colors ${
-                allMembersSelected
-                  ? 'bg-cyan-700 text-white hover:bg-red-500 font-semibold'
-                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              }`}
-            >
-              All
-            </button>
-            {group.members.map((member) => {
-              const isIncluded = includedMemberIds.has(member.id);
-              const isYou = currentUser && member.id === currentUser.id;
-              return (
-                <div
-                  key={member.id}
-                  draggable
-                  onClick={() => handleMemberTap(member.id)}
-                  onDragStart={(e) => handleMemberDragStart(e, member.id)}
-                  className={`px-3 py-1.5 rounded-full text-sm cursor-grab active:cursor-grabbing select-none transition-colors ${
-                    isIncluded
-                      ? 'bg-cyan-600 text-white hover:bg-red-500'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                  }`}
-                >
-                  {member.name}{isYou && <> <YouBadge /></>}
-                </div>
-              );
-            })}
-          </div>
-          <p className="text-xs text-gray-500 mt-2">
-            {splitMode === 'items'
-              ? 'Drag to items or "+ Add item" below'
-              : 'Tap to add/remove from expense'}
-          </p>
-        </div>
+        )}
 
         {/* Total + Discount (same row) */}
         <div>
@@ -751,10 +786,32 @@ export function AddExpense() {
           >
             Shares
           </button>
+          <button
+            type="button"
+            onClick={() => handleSplitModeChange('group')}
+            className={`flex-1 text-center py-1.5 text-sm rounded-md transition-colors ${
+              splitMode === 'group'
+                ? 'bg-cyan-600 text-white font-semibold'
+                : 'text-gray-500'
+            }`}
+          >
+            Group
+          </button>
         </div>
 
         {/* Split details */}
-        {splitMode === 'items' ? (
+        {splitMode === 'group' ? (
+          <div className="bg-gray-800 border border-gray-700 rounded-lg px-4 py-3 text-sm text-gray-300">
+            <p className="font-medium text-gray-100 mb-1">
+              Split across the whole group ({group.members.length} member{group.members.length === 1 ? '' : 's'})
+            </p>
+            <p className="text-xs text-gray-500">
+              Uses each member's configured share weight. Adding/removing members
+              or changing share weights retroactively re-weights this and every
+              other group transaction.
+            </p>
+          </div>
+        ) : splitMode === 'items' ? (
           <div>
             <div className="flex justify-between items-center mb-2">
               <label className="block text-sm font-medium text-gray-300">Amounts</label>
@@ -846,7 +903,14 @@ export function AddExpense() {
 
         <button
           type="submit"
-          disabled={submitting || (splitMode === 'items' ? items.length === 0 : Object.keys(memberShares).length === 0 || totalAmount <= 0)}
+          disabled={
+            submitting ||
+            (splitMode === 'items'
+              ? items.length === 0
+              : splitMode === 'group'
+                ? totalAmount <= 0 || group.members.length === 0
+                : Object.keys(memberShares).length === 0 || totalAmount <= 0)
+          }
           className="w-full bg-cyan-600 text-white py-3 rounded-lg font-medium hover:bg-cyan-700 disabled:opacity-50"
         >
           {submitting ? 'Adding...' : 'Add Transaction'}
@@ -855,8 +919,18 @@ export function AddExpense() {
 
       <ConfirmDialog
         open={pendingModeSwitch !== null}
-        title={pendingModeSwitch === 'shares' ? 'Switch to Shares' : 'Switch to Items'}
-        message={pendingModeSwitch === 'shares' ? 'Your items will be cleared. This cannot be undone.' : 'Your shares will be cleared. This cannot be undone.'}
+        title={
+          pendingModeSwitch === 'shares' ? 'Switch to Shares' :
+          pendingModeSwitch === 'group' ? 'Switch to Group' :
+          'Switch to Items'
+        }
+        message={
+          pendingModeSwitch === 'group'
+            ? 'Your current split configuration will be cleared. This cannot be undone.'
+            : pendingModeSwitch === 'shares'
+              ? 'Your items will be cleared. This cannot be undone.'
+              : 'Your shares will be cleared. This cannot be undone.'
+        }
         confirmLabel="Clear & Switch"
         destructive
         onConfirm={() => pendingModeSwitch && executeModeSwitch(pendingModeSwitch)}
