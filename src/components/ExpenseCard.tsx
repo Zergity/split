@@ -24,23 +24,15 @@ export function ExpenseCard({
   onDelete,
   initialExpanded = false,
 }: ExpenseCardProps) {
-  const { currentUser, updateExpense, claimExpenseItem, deleteExpense, expenses: allExpenses } = useApp();
+  const { currentUser, updateExpense, claimExpenseItem, deleteExpense, tagsByFrequency } = useApp();
 
-  // Tag suggestions: every tag that appears on other (non-deleted) expenses in
-  // the group, sorted by frequency descending, minus tags already on this one.
+  // Tag suggestions: the group-wide frequency-sorted list (memoized in the
+  // provider so it's computed once per expenses update, not once per card),
+  // minus the tags already on this expense.
   const tagSuggestions = useMemo(() => {
-    const freq = new Map<string, number>();
-    allExpenses.forEach((e) => {
-      e.tags?.filter((t) => t !== 'deleted').forEach((t) =>
-        freq.set(t, (freq.get(t) || 0) + 1)
-      );
-    });
     const existing = new Set(expense.tags ?? []);
-    return [...freq.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .map(([tag]) => tag)
-      .filter((t) => !existing.has(t));
-  }, [allExpenses, expense.tags]);
+    return tagsByFrequency.filter((t) => !existing.has(t));
+  }, [tagsByFrequency, expense.tags]);
   const [expanded, setExpanded] = useState(initialExpanded);
   const [showReceipt, setShowReceipt] = useState(false);
   const [editingTags, setEditingTags] = useState(false);

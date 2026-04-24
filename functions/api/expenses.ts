@@ -1,31 +1,16 @@
 import type { AuthEnv } from './types/auth';
 import { requireGroup } from './utils/session';
-import { getExpenses, saveExpenses, GroupRecord, findMember } from './utils/groups';
+import {
+  getExpenses,
+  saveExpenses,
+  GroupRecord,
+  findMember,
+  memberIdsToUserIds,
+  validateExpenseInput,
+  type Expense,
+} from './utils/groups';
 import { notifyMembers as notifyPush } from './utils/web-push';
 import { notifyMembers as notifyTelegram, sendTelegramNotification } from './utils/telegram';
-
-type SplitType = 'equal' | 'exact' | 'percentage' | 'shares' | 'settlement';
-
-interface ExpenseSplit {
-  memberId: string;
-  value: number;
-  amount: number;
-  signedOff: boolean;
-  signedAt?: string;
-}
-
-interface Expense {
-  id: string;
-  description: string;
-  amount: number;
-  paidBy: string;
-  createdBy?: string;
-  splitType: SplitType;
-  splits: ExpenseSplit[];
-  createdAt: string;
-  receiptUrl?: string;
-  receiptDate?: string;
-}
 
 function getMemberName(group: GroupRecord, id: string): string {
   return findMember(group, id)?.name ?? id;
@@ -33,17 +18,6 @@ function getMemberName(group: GroupRecord, id: string): string {
 
 function formatAmount(amount: number, currency: string): string {
   return `${amount.toLocaleString('vi-VN')} ${currency}`;
-}
-
-// Resolve member ids to their user ids (for Telegram which is user-scoped).
-// Members without a userId (unclaimed placeholders) are dropped.
-function memberIdsToUserIds(group: GroupRecord, memberIds: string[]): string[] {
-  const out: string[] = [];
-  for (const id of memberIds) {
-    const m = findMember(group, id);
-    if (m?.userId) out.push(m.userId);
-  }
-  return out;
 }
 
 async function sendExpenseNotification(
@@ -152,13 +126,19 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
   try {
     const ctx = await requireGroup(context.env, context.request);
     if (ctx instanceof Response) return ctx;
-    const { group } = ctx;
+    const { group, member } = ctx;
 
     const expense = (await context.request.json()) as Omit<Expense, 'id' | 'createdAt'>;
+    const validationError = validateExpenseInput(group, expense);
+    if (validationError) {
+      return Response.json({ success: false, error: validationError }, { status: 400 });
+    }
+
     const expenses = (await getExpenses(context.env, group.id)) as Expense[];
 
     const newExpense: Expense = {
       ...expense,
+      createdBy: expense.createdBy ?? member.id,
       id: crypto.randomUUID(),
       createdAt: new Date().toISOString(),
     };

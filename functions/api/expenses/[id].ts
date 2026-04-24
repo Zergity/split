@@ -1,31 +1,39 @@
 import type { AuthEnv } from '../types/auth';
 import { requireGroup } from '../utils/session';
-import { getExpenses, saveExpenses, GroupRecord, findMember } from '../utils/groups';
+import {
+  getExpenses,
+  saveExpenses,
+  GroupRecord,
+  GroupMember,
+  findMember,
+  memberIdsToUserIds,
+  validateExpenseInput,
+  isAdmin,
+  type Expense,
+} from '../utils/groups';
 import { notifyMembers as notifyPush } from '../utils/web-push';
 import { notifyMembers as notifyTelegram, sendDebouncedEditNotification } from '../utils/telegram';
 
-type SplitType = 'equal' | 'exact' | 'percentage' | 'shares' | 'settlement';
-
-interface ExpenseSplit {
-  memberId: string;
-  value: number;
-  amount: number;
-  signedOff: boolean;
-  signedAt?: string;
+// Fields that rewrite the "truth" of an expense (amount, attribution). Only
+// the original creator or a group admin can change these; anyone else can
+// still sign off their own split, claim items, or adjust descriptive tags.
+function structuralFieldsChanged(before: Expense, after: Expense): boolean {
+  return (
+    before.amount !== after.amount ||
+    before.paidBy !== after.paidBy ||
+    before.splitType !== after.splitType ||
+    (before.createdBy ?? before.paidBy) !== (after.createdBy ?? after.paidBy) ||
+    before.description !== after.description
+  );
 }
 
-interface Expense {
-  id: string;
-  description: string;
-  amount: number;
-  paidBy: string;
-  createdBy?: string;
-  splitType: SplitType;
-  splits: ExpenseSplit[];
-  createdAt: string;
-  receiptUrl?: string;
-  receiptDate?: string;
-  tags?: string[];
+function canEditExpenseStructurally(
+  group: GroupRecord,
+  expense: Expense,
+  actor: GroupMember,
+): boolean {
+  const creatorId = expense.createdBy ?? expense.paidBy;
+  return creatorId === actor.id || isAdmin(group, actor.id);
 }
 
 function getMemberName(group: GroupRecord, id: string): string {
@@ -34,15 +42,6 @@ function getMemberName(group: GroupRecord, id: string): string {
 
 function formatAmount(amount: number, currency: string): string {
   return `${amount.toLocaleString('vi-VN')} ${currency}`;
-}
-
-function memberIdsToUserIds(group: GroupRecord, memberIds: string[]): string[] {
-  const out: string[] = [];
-  for (const id of memberIds) {
-    const m = findMember(group, id);
-    if (m?.userId) out.push(m.userId);
-  }
-  return out;
 }
 
 async function sendEditNotification(
@@ -131,13 +130,25 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    expenses[index] = {
-      ...expenses[index],
+    const before = expenses[index];
+    const merged: Expense = {
+      ...before,
       ...updates,
-      id: expenses[index].id,
-      createdAt: expenses[index].createdAt,
+      id: before.id,
+      createdAt: before.createdAt,
     };
-    const updatedExpense = expenses[index];
+    if (structuralFieldsChanged(before, merged) && !canEditExpenseStructurally(group, before, member)) {
+      return Response.json(
+        { success: false, error: 'Only the creator or a group admin can change this expense' },
+        { status: 403 },
+      );
+    }
+    const validationError = validateExpenseInput(group, merged);
+    if (validationError) {
+      return Response.json({ success: false, error: validationError }, { status: 400 });
+    }
+    expenses[index] = merged;
+    const updatedExpense = merged;
     await saveExpenses(context.env, group.id, expenses);
 
     const isDeleted = updatedExpense.tags?.includes('deleted');
@@ -172,6 +183,12 @@ export const onRequestDelete: PagesFunction<AuthEnv> = async (context) => {
     }
 
     const deletedExpense = expenses[index];
+    if (!canEditExpenseStructurally(group, deletedExpense, member)) {
+      return Response.json(
+        { success: false, error: 'Only the creator or a group admin can delete this expense' },
+        { status: 403 },
+      );
+    }
     expenses.splice(index, 1);
     await saveExpenses(context.env, group.id, expenses);
 

@@ -264,21 +264,24 @@ export async function notifyMembers(
   const tasks: Promise<void>[] = [];
 
   // Save notification history — scoped per (userId, groupId) so users only see
-  // their active group's notifications in the bell.
-  for (const { userId } of resolved) {
-    const notiKey = KV_KEYS.notifications(userId, group.id);
-    const existing = (await env.SPLITTER_KV.get<NotificationRecord[]>(notiKey, 'json')) || [];
-    const record: NotificationRecord = {
-      id: crypto.randomUUID(),
-      title: payload.title,
-      body: payload.body,
-      url: payload.url,
-      createdAt: new Date().toISOString(),
-      read: false,
-    };
-    const updated = [record, ...existing].slice(0, MAX_NOTIFICATIONS);
-    await env.SPLITTER_KV.put(notiKey, JSON.stringify(updated));
-  }
+  // their active group's notifications in the bell. Each user's history is
+  // independent so the reads and writes overlap.
+  await Promise.all(
+    resolved.map(async ({ userId }) => {
+      const notiKey = KV_KEYS.notifications(userId, group.id);
+      const existing = (await env.SPLITTER_KV.get<NotificationRecord[]>(notiKey, 'json')) || [];
+      const record: NotificationRecord = {
+        id: crypto.randomUUID(),
+        title: payload.title,
+        body: payload.body,
+        url: payload.url,
+        createdAt: new Date().toISOString(),
+        read: false,
+      };
+      const updated = [record, ...existing].slice(0, MAX_NOTIFICATIONS);
+      await env.SPLITTER_KV.put(notiKey, JSON.stringify(updated));
+    }),
+  );
 
   for (const { userId } of resolved) {
     if (event) {

@@ -64,7 +64,7 @@ export function GroupList() {
             >
               <button
                 onClick={() => handleSelect(g.id)}
-                className="flex-1 text-left p-4 hover:bg-gray-750 rounded-l-xl min-w-0"
+                className="flex-1 text-left p-4 hover:bg-gray-700 rounded-l-xl min-w-0"
               >
                 <p className="font-medium text-gray-100 truncate">{g.name}</p>
                 <p className="text-xs text-gray-400 mt-0.5">

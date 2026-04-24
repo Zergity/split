@@ -1,7 +1,7 @@
 import { verifyRegistrationResponse } from '@simplewebauthn/server';
 import type { AuthEnv, RegisterVerifyRequest, StoredCredential } from '../../types/auth';
 import { consumeChallenge } from '../../utils/challenges';
-import { addCredential } from '../../utils/credentials';
+import { addCredential, getCredentials } from '../../utils/credentials';
 import { createSession, createAuthCookie } from '../../utils/jwt';
 import {
   LEGACY_GROUP_ID,
@@ -9,7 +9,7 @@ import {
   getGroup,
   saveGroup,
 } from '../../utils/groups';
-import { createUser, getUser, saveUser, addMembership } from '../../utils/users';
+import { createUser, getUser, addMembership } from '../../utils/users';
 
 // This endpoint only registers new members into the legacy '1matrix' group
 // (where userId === memberId). Joining any other group goes through the
@@ -31,6 +31,25 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
 
     const env = context.env;
     const targetGroupId = LEGACY_GROUP_ID;
+
+    // Legacy 1matrix invariant: userId === memberId. See below.
+    const userId = memberId;
+
+    // Refuse to (re)register an identity that already exists. Adding another
+    // passkey to an existing account goes through the authenticated
+    // /api/auth/passkeys/invite flow. Without this gate, any unauthenticated
+    // caller who knows a legacy memberId (UUIDs are visible to every group
+    // member) could append their own credential to the victim's account.
+    const [existingUser, existingCredentials] = await Promise.all([
+      getUser(env, userId),
+      getCredentials(env, userId),
+    ]);
+    if (existingCredentials.length > 0 || existingUser) {
+      return Response.json(
+        { success: false, error: 'This member is already registered' },
+        { status: 409 }
+      );
+    }
 
     // Get and consume the challenge (one-time use)
     const expectedChallenge = await consumeChallenge(env, memberId, 'registration');
@@ -58,18 +77,9 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    // Legacy 1matrix invariant: userId === memberId. Credentials stored under
-    // 'credentials:<memberId>' on main remain readable after this PR.
-    const userId = memberId;
-
-    // Upsert the User record.
-    let user = await getUser(env, userId);
-    if (!user) {
-      user = await createUser(env, { id: userId, name: memberName });
-    } else if (user.name !== memberName) {
-      user = { ...user, name: memberName };
-      await saveUser(env, user);
-    }
+    // We refused above if a User or credentials already exist, so this is a
+    // fresh registration.
+    const user = await createUser(env, { id: userId, name: memberName });
 
     // Ensure the group exists and the member row points at this user.
     const group = await getGroup(env, targetGroupId);
@@ -111,12 +121,16 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
         joinedAt: existing.joinedAt ?? now,
       };
     }
-    await saveGroup(env, group);
+    // Write membership first so a crashed partial write leaves state that
+    // /api/groups can recover (a stale membership with an unknown memberId
+    // is filtered out; a missing membership would hide the group from the
+    // user who just registered).
     await addMembership(env, userId, {
       groupId: targetGroupId,
       memberId,
       joinedAt: now,
     });
+    await saveGroup(env, group);
 
     const { registrationInfo } = verification;
     const storedCredential: StoredCredential = {
@@ -153,10 +167,12 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       }
     );
   } catch (error) {
+    // Log the detailed error server-side; return a generic string so we
+    // don't leak library internals (origin/RPID, CBOR decode failures, etc.)
+    // that would help an attacker probe the deployment.
     console.error('[reg/verify] FULL ERROR:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return Response.json(
-      { success: false, error: `Failed to verify registration: ${errorMessage}` },
+      { success: false, error: 'Failed to verify registration' },
       { status: 500 }
     );
   }

@@ -4,6 +4,8 @@ import {
   useState,
   useEffect,
   useCallback,
+  useMemo,
+  useRef,
   ReactNode,
 } from 'react';
 import { Group, GroupSummary, Expense, Member } from '../types';
@@ -15,6 +17,10 @@ interface AppContextType {
   groups: GroupSummary[];
   group: Group | null;
   expenses: Expense[];
+  // Non-"deleted" tags across all expenses, sorted by descending frequency.
+  // Computed once at the provider so every ExpenseCard can filter its own
+  // tags off a shared list instead of walking every expense per render.
+  tagsByFrequency: string[];
   currentUser: Member | null;
   loading: boolean;
   error: string | null;
@@ -71,26 +77,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [activeGroupId, setActiveGroup]);
 
+  const tagsByFrequency = useMemo(() => {
+    const freq = new Map<string, number>();
+    for (const e of expenses) {
+      if (!e.tags) continue;
+      for (const t of e.tags) {
+        if (t === 'deleted') continue;
+        freq.set(t, (freq.get(t) ?? 0) + 1);
+      }
+    }
+    return [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
+  }, [expenses]);
+
+  // Tracks the last refresh we issued, so a response that lands after the
+  // user has switched groups can be discarded instead of applied to state
+  // for the new group. Without this guard, any in-flight refresh (SW event,
+  // visibilitychange, retry) would silently splice stale data in.
+  const refreshTargetRef = useRef<string>(getActiveGroupId());
+
   const refreshData = useCallback(async () => {
+    const targetGroupId = getActiveGroupId();
+    refreshTargetRef.current = targetGroupId;
     try {
       setLoading(true);
       const [groupData, expensesData] = await Promise.all([
-        api.getGroup(),
-        api.getExpenses(),
+        api.getGroup(targetGroupId),
+        api.getExpenses(targetGroupId),
       ]);
+      if (refreshTargetRef.current !== targetGroupId) return;
       setGroup(groupData);
       setExpenses(expensesData);
       setError(null);
     } catch (err) {
+      if (refreshTargetRef.current !== targetGroupId) return;
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
     } finally {
-      setLoading(false);
+      if (refreshTargetRef.current === targetGroupId) setLoading(false);
     }
   }, []);
 
   const addMember = useCallback(
     async (name: string): Promise<Member | null> => {
       if (!group) return null;
+      // This path exists for the legacy 1matrix self-registration flow: the
+      // new user types a name, MemberSelector adds the placeholder, then
+      // /api/auth/register/verify binds a passkey to it. register/verify
+      // only works against the legacy group, so calling addMember in any
+      // other group would leave a dangling placeholder nobody could claim.
+      // Direct-add into a real group goes through api.addFriendToGroup.
+      if (group.id !== LEGACY_GROUP_ID) {
+        throw new Error('Use invite link or direct-add in multi-group mode');
+      }
       const trimmedName = name.trim();
       const newMember: Member = {
         id: crypto.randomUUID(),
@@ -100,6 +137,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         members: [...group.members, newMember],
       });
       setGroup(updated);
+      // The server mints placeholder ids (see /api/group PUT), so we can't
+      // match by the UUID we proposed — fall back to name-based lookup.
       const addedMember = updated.members.find(
         (m) => m.name.toLowerCase() === trimmedName.toLowerCase()
       );
@@ -241,6 +280,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         groups,
         group,
         expenses,
+        tagsByFrequency,
         currentUser,
         loading,
         error,
@@ -271,5 +311,3 @@ export function useApp() {
   }
   return context;
 }
-
-export { LEGACY_GROUP_ID };

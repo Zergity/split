@@ -67,12 +67,18 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       joinedAt: now,
     };
     group.members.push(newMember);
-    await saveGroup(context.env, group);
+    // Write membership first. If saveGroup subsequently fails, a stale
+    // membership whose memberId isn't in the group is recoverable — the
+    // group-side filter in /api/groups simply skips it and a retry fixes
+    // everything up. The reverse (group row present, membership missing)
+    // leaves the user invisible to themselves: they're in the group but
+    // /api/groups won't include it, and the row is still taking a slot.
     await addMembership(context.env, userId, {
       groupId: group.id,
       memberId: newMember.id,
       joinedAt: now,
     });
+    await saveGroup(context.env, group);
 
     return Response.json({ success: true, data: group });
   } catch (error) {

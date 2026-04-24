@@ -177,8 +177,8 @@ export async function acceptInvite(
 
 // --- Expenses ---
 
-export async function getExpenses(): Promise<Expense[]> {
-  return fetchApi<Expense[]>('/expenses');
+export async function getExpenses(groupId?: string): Promise<Expense[]> {
+  return fetchApi<Expense[]>('/expenses', groupId ? { groupId } : undefined);
 }
 
 export async function createExpense(

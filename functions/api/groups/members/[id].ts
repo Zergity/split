@@ -4,8 +4,13 @@ import { softRemoveMember, findMember, saveGroup } from '../../utils/groups';
 import { removeMembership } from '../../utils/users';
 
 // PATCH /api/groups/members/:id — admin edits per-member settings.
-// Currently only share (the "Split" weight). Rate of undefined/null
-// clears the override back to the implicit default of 1; values ≤0 are rejected.
+// Currently only share (the "Split" weight). Passing null/undefined or 0
+// clears the override back to the implicit default of 1 (matching the
+// GroupMember.share type comment). Negative, non-finite, or absurdly large
+// values are rejected — shares are weights only, so we cap at 1e6 to keep
+// the downstream distribution math in a sane range.
+const SHARE_MAX = 1_000_000;
+
 export const onRequestPatch: PagesFunction<AuthEnv> = async (context) => {
   try {
     const ctx = await requireGroupAdmin(context.env, context.request);
@@ -20,23 +25,23 @@ export const onRequestPatch: PagesFunction<AuthEnv> = async (context) => {
 
     const body = await context.request.json() as { share?: number | null };
 
-    let nextRate = target.share;
+    let nextShare = target.share;
     if ('share' in body) {
       const raw = body.share;
-      if (raw === null || raw === undefined) {
-        nextRate = undefined;
-      } else if (typeof raw !== 'number' || !Number.isFinite(raw) || raw <= 0) {
+      if (raw === null || raw === undefined || raw === 0) {
+        nextShare = undefined;
+      } else if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0 || raw > SHARE_MAX) {
         return Response.json(
-          { success: false, error: 'share must be a positive number' },
+          { success: false, error: `share must be between 0 and ${SHARE_MAX}` },
           { status: 400 }
         );
       } else {
-        nextRate = raw;
+        nextShare = raw;
       }
     }
 
     const updatedMembers = group.members.map((m) =>
-      m.id === memberId ? { ...m, share: nextRate } : m
+      m.id === memberId ? { ...m, share: nextShare } : m
     );
     const updated = { ...group, members: updatedMembers };
     await saveGroup(context.env, updated);
