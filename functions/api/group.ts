@@ -1,6 +1,6 @@
 import type { AuthEnv } from './types/auth';
 import { requireGroup } from './utils/session';
-import { saveGroup, GroupRecord } from './utils/groups';
+import { saveGroup, GroupRecord, GroupMember } from './utils/groups';
 
 // GET /api/group — return the active group (scoped by X-Group-Id header).
 export const onRequestGet: PagesFunction<AuthEnv> = async (context) => {
@@ -57,34 +57,54 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
       // for removal and admin management — this endpoint is the ergonomic
       // "add member by name" path.
       const existingById = new Map(group.members.map((m) => [m.id, m]));
-      for (const incoming of updates.members) {
-        const prior = existingById.get(incoming.id);
-        if (prior && !isAdminCaller && prior.name !== incoming.name) {
+
+      if (isAdminCaller) {
+        members = updates.members;
+      } else {
+        // Rebuild the member list from trusted state. Non-admin callers may
+        // ONLY add entries with a name; server mints the id, and all other
+        // fields (userId, joinedAt, share, bank*) are ignored. Accepting
+        // client-supplied userId here would let a non-admin forge a member
+        // row that claims to belong to another user — which then bootstraps
+        // a shared-group "friend" relationship they could exploit via
+        // /api/groups/members.
+        const newPlaceholders: GroupMember[] = [];
+        for (const incoming of updates.members) {
+          const prior = existingById.get(incoming.id);
+          if (prior) continue; // existing rows are not mutable by non-admins
+          const name = typeof incoming.name === 'string' ? incoming.name.trim() : '';
+          if (!name) {
+            return Response.json(
+              { success: false, error: 'Member name is required' },
+              { status: 400 }
+            );
+          }
+          newPlaceholders.push({
+            id: crypto.randomUUID(),
+            name,
+          });
+        }
+
+        // Detect attempted removals or reorders of existing rows — require admin.
+        const newIds = new Set(updates.members.map((m) => m.id));
+        const removedBySave = group.members.some((m) => !newIds.has(m.id));
+        if (removedBySave) {
           return Response.json(
-            { success: false, error: 'Only admins can rename existing members' },
+            { success: false, error: 'Only admins can remove members' },
             { status: 403 }
           );
         }
+
+        members = [...group.members, ...newPlaceholders];
       }
 
-      // Detect real removals (present in old, absent in new) — require admin.
-      const newIds = new Set(updates.members.map((m) => m.id));
-      const removedBySave = group.members.some((m) => !newIds.has(m.id));
-      if (removedBySave && !isAdminCaller) {
-        return Response.json(
-          { success: false, error: 'Only admins can remove members' },
-          { status: 403 }
-        );
-      }
-
-      const duplicateName = findDuplicateName(updates.members);
+      const duplicateName = findDuplicateName(members);
       if (duplicateName) {
         return Response.json(
           { success: false, error: `Name "${duplicateName}" already exists` },
           { status: 400 }
         );
       }
-      members = updates.members;
     }
 
     const updated: GroupRecord = {
