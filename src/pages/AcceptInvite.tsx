@@ -119,23 +119,41 @@ export function AcceptInvite() {
       setSuccess('group');
       setTimeout(() => navigate('/'), 1200);
     } catch (err) {
+      // Server refuses to create a second account backed by a passkey
+      // already known to another user. Redirect them into the sign-in
+      // flow instead of bubbling up a confusing "failed" message.
+      if ((err as Error & { code?: string })?.code === 'CREDENTIAL_EXISTS') {
+        await handleSignInAndJoin();
+        return;
+      }
       setPageError(err instanceof Error ? err.message : 'Failed to create account');
     } finally {
       setSubmitting(false);
     }
   };
 
-  // --- Group invite: sign in with existing passkey, then accept ---
+  // --- Group invite: sign in with existing passkey, then accept in one step ---
   const handleSignInAndJoin = async () => {
     if (!code || invite.kind !== 'group') return;
     clearWebAuthnError();
     setPageError(null);
+    setSubmitting(true);
     try {
-      await authenticate();
-      // After sign-in, useEffect re-renders with the authenticated branch
-      // and the user clicks "Join group" from there.
+      const signedIn = await authenticate();
+      // Chain straight into accept — the session cookie is live even
+      // though React state hasn't re-rendered yet. Fall back to the
+      // signed-in user's profile name if the invite-form input was
+      // left blank.
+      const nameToUse = displayName.trim() || signedIn.userName;
+      const result = await api.acceptInvite(code, nameToUse || undefined);
+      setActiveGroup(result.groupId);
+      await Promise.all([refreshGroups(), refreshData()]);
+      setSuccess('group');
+      setTimeout(() => navigate('/'), 1200);
     } catch (err) {
       setPageError(err instanceof Error ? err.message : 'Failed to sign in');
+    } finally {
+      setSubmitting(false);
     }
   };
 

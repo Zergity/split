@@ -1,7 +1,7 @@
 import { verifyRegistrationResponse } from '@simplewebauthn/server';
 import type { AuthEnv, RegisterVerifyRequest, StoredCredential } from '../../types/auth';
 import { consumeChallenge } from '../../utils/challenges';
-import { addCredential, getCredentials } from '../../utils/credentials';
+import { addCredential, getCredentials, findCredentialOwner } from '../../utils/credentials';
 import { createSession, createAuthCookie } from '../../utils/jwt';
 import {
   LEGACY_GROUP_ID,
@@ -97,6 +97,28 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       return Response.json(
         { success: false, error: 'Registration verification failed' },
         { status: 400 }
+      );
+    }
+
+    // Reject if this passkey already belongs to someone. The (existingUser
+    // || existingCredentials) gate above is keyed by the client-supplied
+    // userId — the invite flow mints a fresh UUID each call, so it will
+    // never collide with an existing account. The authoritative dedupe is
+    // by credential id (globally unique per authenticator), checked here
+    // after WebAuthn verification so we never touch KV on unverified
+    // claims. Without this, a returning user on an invite link would end
+    // up with a second, duplicate User backed by the same physical
+    // passkey.
+    const credentialId = verification.registrationInfo.credential.id;
+    const existingOwner = await findCredentialOwner(env, credentialId);
+    if (existingOwner) {
+      return Response.json(
+        {
+          success: false,
+          error: 'This passkey is already registered. Sign in instead.',
+          code: 'CREDENTIAL_EXISTS',
+        },
+        { status: 409 }
       );
     }
 
