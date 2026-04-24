@@ -4,6 +4,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useMemo,
   useRef,
   ReactNode,
 } from 'react';
@@ -16,6 +17,10 @@ interface AppContextType {
   groups: GroupSummary[];
   group: Group | null;
   expenses: Expense[];
+  // Non-"deleted" tags across all expenses, sorted by descending frequency.
+  // Computed once at the provider so every ExpenseCard can filter its own
+  // tags off a shared list instead of walking every expense per render.
+  tagsByFrequency: string[];
   currentUser: Member | null;
   loading: boolean;
   error: string | null;
@@ -71,6 +76,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setGroups([]);
     }
   }, [activeGroupId, setActiveGroup]);
+
+  const tagsByFrequency = useMemo(() => {
+    const freq = new Map<string, number>();
+    for (const e of expenses) {
+      if (!e.tags) continue;
+      for (const t of e.tags) {
+        if (t === 'deleted') continue;
+        freq.set(t, (freq.get(t) ?? 0) + 1);
+      }
+    }
+    return [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([tag]) => tag);
+  }, [expenses]);
 
   // Tracks the last refresh we issued, so a response that lands after the
   // user has switched groups can be discarded instead of applied to state
@@ -263,6 +280,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         groups,
         group,
         expenses,
+        tagsByFrequency,
         currentUser,
         loading,
         error,
