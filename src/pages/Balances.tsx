@@ -2,7 +2,13 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { BalanceCard } from '../components/BalanceCard';
-import { calculateBalances, calculateSettlements, formatCurrency } from '../utils/balances';
+import { WeeklySpendingChart } from '../components/WeeklySpendingChart';
+import {
+  calculateBalances,
+  calculateSettlements,
+  calculateWeeklySpending,
+  formatCurrency,
+} from '../utils/balances';
 import { YouBadge } from '../components/YouBadge';
 
 export function Balances() {
@@ -17,11 +23,16 @@ export function Balances() {
   const allMembers = [...group.members, ...group.removedMembers];
   const balances = calculateBalances(expenses, allMembers);
   const settlements = calculateSettlements(balances);
+  const weekly = calculateWeeklySpending(expenses, currentUser?.id ?? null);
 
   const sortedBalances = [...balances].sort((a, b) => b.signedBalance - a.signedBalance);
 
   return (
     <div className="space-y-8">
+      <section>
+        <WeeklySpendingChart data={weekly} currency={group.currency} hasUser={!!currentUser} />
+      </section>
+
       <section>
         <h2 className="text-xl font-bold mb-4">Balances</h2>
 

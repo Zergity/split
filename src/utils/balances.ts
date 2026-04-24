@@ -186,6 +186,72 @@ export function getDateKey(dateString: string): string {
   return date.toISOString().split('T')[0];
 }
 
+// Monday 00:00 local time of the ISO week containing `date`
+export function getISOWeekStart(date: Date): Date {
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = d.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  const shift = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + shift);
+  return d;
+}
+
+function ymdKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export interface WeeklySpending {
+  weekStart: string; // YYYY-MM-DD of the Monday (local time)
+  groupTotal: number;
+  userShare: number;
+}
+
+// Aggregate expenses into weekly buckets (Mon–Sun). Settlements and deleted
+// expenses are excluded — they are transfers, not spending.
+// Weeks with no activity between first and last observed week are included
+// with zero values so the chart reads as a continuous timeline.
+export function calculateWeeklySpending(
+  expenses: Expense[],
+  currentUserId: string | null
+): WeeklySpending[] {
+  const map = new Map<string, { groupTotal: number; userShare: number }>();
+
+  for (const expense of expenses) {
+    if (isDeleted(expense)) continue;
+    if (expense.splitType === 'settlement') continue;
+
+    const when = new Date(expense.receiptDate || expense.createdAt);
+    if (isNaN(when.getTime())) continue;
+
+    const key = ymdKey(getISOWeekStart(when));
+    const entry = map.get(key) || { groupTotal: 0, userShare: 0 };
+    entry.groupTotal += expense.amount;
+    if (currentUserId) {
+      for (const split of expense.splits) {
+        if (split.memberId === currentUserId) {
+          entry.userShare += split.amount;
+        }
+      }
+    }
+    map.set(key, entry);
+  }
+
+  const keys = [...map.keys()].sort();
+  if (keys.length === 0) return [];
+
+  const [fy, fm, fd] = keys[0].split('-').map(Number);
+  const [ly, lm, ld] = keys[keys.length - 1].split('-').map(Number);
+  const first = new Date(fy, fm - 1, fd);
+  const last = new Date(ly, lm - 1, ld);
+
+  const result: WeeklySpending[] = [];
+  for (let d = new Date(first); d.getTime() <= last.getTime(); d.setDate(d.getDate() + 7)) {
+    const key = ymdKey(d);
+    const entry = map.get(key) || { groupTotal: 0, userShare: 0 };
+    result.push({ weekStart: key, ...entry });
+  }
+  return result;
+}
+
 // Format date key as display header
 export function formatDateHeader(dateKey: string): string {
   const date = new Date(dateKey + 'T00:00:00');
