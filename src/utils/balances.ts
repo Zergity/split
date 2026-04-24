@@ -12,6 +12,29 @@ export function parseDecimal(raw: string): number {
   return parseFloat(raw.replace(',', '.'));
 }
 
+// Clean up what the user typed in a `type="text" inputMode="decimal"` field
+// so the visible value can't drift from what parseDecimal will later accept.
+// Strips non-numeric characters, collapses multiple decimal separators to
+// one (keeping the first), and allows either '.' or ',' as the separator so
+// the field reads naturally in mixed locales. Does not parse or validate —
+// leading/trailing separators and the empty string come through as-is
+// because the user may still be typing.
+export function sanitizeDecimalInput(raw: string): string {
+  let seenSep = false;
+  let out = '';
+  for (const ch of raw) {
+    if (ch >= '0' && ch <= '9') {
+      out += ch;
+      continue;
+    }
+    if ((ch === '.' || ch === ',') && !seenSep) {
+      out += ch;
+      seenSep = true;
+    }
+  }
+  return out;
+}
+
 export function calculateBalances(
   expenses: Expense[],
   members: Member[]

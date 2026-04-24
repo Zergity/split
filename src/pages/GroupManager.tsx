@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { useAuthContext } from '../components/auth';
 import * as api from '../api/client';
+import { sanitizeDecimalInput } from '../utils/balances';
 import type { Group, GroupInvite, Member } from '../types';
 import type { FriendCandidate } from '../api/client';
 
@@ -440,10 +441,8 @@ function MemberRateInput({
     <label className="flex items-center text-xs text-gray-400" title="Share">
       <input
         type="text" inputMode="decimal"
-        step="0.1"
-        min="0"
         value={local}
-        onChange={(e) => setLocal(e.target.value)}
+        onChange={(e) => setLocal(sanitizeDecimalInput(e.target.value))}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
         disabled={busy}

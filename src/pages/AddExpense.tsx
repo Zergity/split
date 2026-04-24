@@ -5,7 +5,7 @@ import { ReceiptCapture } from '../components/ReceiptCapture';
 import { ReceiptItems } from '../components/ReceiptItems';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ReceiptItem, ReceiptOCRResult, DiscountType } from '../types';
-import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal, parseDecimal } from '../utils/balances';
+import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal, parseDecimal, sanitizeDecimalInput } from '../utils/balances';
 import { YouBadge } from '../components/YouBadge';
 import { ShareControl } from '../components/ShareControl';
 
@@ -651,19 +651,19 @@ export function AddExpense() {
             <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Total</span>
             <input
               type="text" inputMode="decimal"
-              min="0"
               value={totalAmount || ''}
               onChange={(e) => {
+                const sanitized = sanitizeDecimalInput(e.target.value);
                 if (splitMode === 'shares') {
                   setHasManualTotal(true);
-                  const parsed = parseDecimal(e.target.value);
+                  const parsed = parseDecimal(sanitized);
                   if (!isNaN(parsed) && parsed >= 0) {
                     setTotalAmount(parsed);
-                  } else if (e.target.value === '' || e.target.value === '0') {
+                  } else if (sanitized === '' || sanitized === '0') {
                     setTotalAmount(0);
                   }
                 } else {
-                  handleTotalChange(e.target.value);
+                  handleTotalChange(sanitized);
                 }
               }}
               placeholder="0"
@@ -692,11 +692,11 @@ export function AddExpense() {
               <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Discount</span>
               <input
                 type="text" inputMode="decimal"
-                min="0"
                 autoFocus
                 value={discount || ''}
                 onChange={(e) => {
-                  const raw = e.target.value ? parseDecimal(e.target.value) : undefined;
+                  const sanitized = sanitizeDecimalInput(e.target.value);
+                  const raw = sanitized ? parseDecimal(sanitized) : undefined;
                   if (discountType === 'flat') {
                     setDiscount(raw && raw > 0 ? raw : undefined);
                   } else {

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Member, SplitType } from '../types';
-import { formatCurrency, roundNumber } from '../utils/balances';
+import { formatCurrency, roundNumber, sanitizeDecimalInput } from '../utils/balances';
 import { useApp } from '../context/AppContext';
 
 interface SplitValue {
@@ -231,10 +231,8 @@ export function SplitInput({
                 <input
                   type="text" inputMode="decimal"
                   value={amountValue}
-                  onChange={(e) => onAmountChange(e.target.value)}
+                  onChange={(e) => onAmountChange(sanitizeDecimalInput(e.target.value))}
                   placeholder="0"
-                  min="0"
-                  step="0.01"
                   className="w-20 bg-gray-700 border border-cyan-600 rounded px-2 py-1 text-right text-sm font-semibold text-gray-100"
                 />
                 <span className="text-xs text-cyan-300 w-4">
@@ -270,7 +268,7 @@ export function SplitInput({
                     type="text"
                     inputMode="decimal"
                     value={displayValue}
-                    onChange={(e) => handleInputChange(member.id, e.target.value)}
+                    onChange={(e) => handleInputChange(member.id, sanitizeDecimalInput(e.target.value))}
                     onFocus={() => handleFocus(member.id, split.value)}
                     onBlur={() => handleBlur(member.id)}
                     placeholder="0"
