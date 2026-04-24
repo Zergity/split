@@ -1,279 +1,343 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuthContext } from '../components/auth';
+import { useApp } from '../context/AppContext';
 import * as authApi from '../api/auth';
+import * as api from '../api/client';
+import type { InvitePreview } from '../api/client';
 
-type Mode = 'choose' | 'new-passkey' | 'existing-passkey';
+// The same /invite/:code URL serves two different flows:
+//   1. Group invite: someone sharing a link to join their expense group.
+//   2. Passkey-device invite: an existing user adding a new device to their
+//      account (cross-device registration).
+// We disambiguate by trying the public group-invite preview first; if that
+// fails, we fall back to the passkey-invite options flow.
+type InviteKind =
+  | { kind: 'loading' }
+  | { kind: 'group'; preview: InvitePreview }
+  | { kind: 'passkey'; userName: string }
+  | { kind: 'error'; message: string };
 
 export function AcceptInvite() {
   const { code } = useParams<{ code: string }>();
   const navigate = useNavigate();
   const {
     authenticated,
+    session,
     acceptPasskeyInvite,
     authenticate,
     webAuthnLoading,
     webAuthnError,
     clearWebAuthnError,
   } = useAuthContext();
+  const { setActiveGroup, refreshGroups, refreshData } = useApp();
 
-  const [memberName, setMemberName] = useState<string | null>(null);
+  const [invite, setInvite] = useState<InviteKind>({ kind: 'loading' });
+  const [displayName, setDisplayName] = useState('');
   const [friendlyName, setFriendlyName] = useState('');
-  const [status, setStatus] = useState<'loading' | 'ready' | 'registering' | 'success' | 'error'>('loading');
-  const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<Mode>('choose');
+  const [mode, setMode] = useState<'choose' | 'new-passkey' | 'existing-passkey'>('choose');
+  const [submitting, setSubmitting] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<'group' | 'passkey' | null>(null);
 
-  // Validate invite code on mount
+  // Resolve what kind of invite this code points to.
   useEffect(() => {
     if (!code) {
-      setStatus('error');
-      setError('Invalid invite link');
+      setInvite({ kind: 'error', message: 'Invalid invite link' });
       return;
     }
+    let cancelled = false;
 
-    // Check if invite is valid by fetching options (this also returns memberName)
-    authApi.getInvitePasskeyOptions(code)
-      .then(({ memberName }) => {
-        setMemberName(memberName);
-        setStatus('ready');
+    api.previewInvite(code)
+      .then((preview) => {
+        if (!cancelled) setInvite({ kind: 'group', preview });
       })
-      .catch((err) => {
-        setStatus('error');
-        setError(err.message || 'Invalid or expired invite code');
+      .catch(() => {
+        // Not a group invite — try the passkey-device invite path.
+        authApi.getInvitePasskeyOptions(code)
+          .then(({ userName }) => {
+            if (!cancelled) setInvite({ kind: 'passkey', userName });
+          })
+          .catch((err) => {
+            if (!cancelled) {
+              setInvite({
+                kind: 'error',
+                message: err instanceof Error ? err.message : 'Invalid or expired invite',
+              });
+            }
+          });
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [code]);
 
+  // Default display name from the user's profile once authenticated.
+  useEffect(() => {
+    if (session && !displayName) setDisplayName(session.userName);
+  }, [session, displayName]);
+
+  // --- Group invite: accept for signed-in user ---
+  const handleAcceptGroupInvite = async () => {
+    if (!code || invite.kind !== 'group') return;
+    setSubmitting(true);
+    setPageError(null);
+    try {
+      const result = await api.acceptInvite(code, displayName.trim() || undefined);
+      setActiveGroup(result.groupId);
+      await Promise.all([refreshGroups(), refreshData()]);
+      setSuccess('group');
+      setTimeout(() => navigate('/'), 1200);
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : 'Failed to join group');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // --- Passkey-device invite: create new passkey ---
   const handleCreateNewPasskey = async () => {
     if (!code) return;
-
-    setStatus('registering');
     clearWebAuthnError();
-    setError(null);
-
+    setPageError(null);
     try {
       await acceptPasskeyInvite(code, friendlyName || undefined);
-      setStatus('success');
-      setTimeout(() => navigate('/'), 2000);
+      setSuccess('passkey');
+      setTimeout(() => navigate('/'), 1500);
     } catch (err) {
-      setStatus('ready');
-      setError(err instanceof Error ? err.message : 'Failed to register passkey');
+      setPageError(err instanceof Error ? err.message : 'Failed to register passkey');
     }
   };
 
+  // --- Passkey-device invite: sign in with existing passkey ---
   const handleUseExistingPasskey = async () => {
-    setStatus('registering');
     clearWebAuthnError();
-    setError(null);
-
+    setPageError(null);
     try {
       await authenticate();
-      setStatus('success');
-      setTimeout(() => navigate('/'), 2000);
+      setSuccess('passkey');
+      setTimeout(() => navigate('/'), 1500);
     } catch (err) {
-      setStatus('ready');
-      setError(err instanceof Error ? err.message : 'Failed to sign in');
+      setPageError(err instanceof Error ? err.message : 'Failed to sign in');
     }
   };
 
-  const handleBack = () => {
-    setMode('choose');
-    setError(null);
-    clearWebAuthnError();
-  };
+  // --- Render ---
 
-  // If user is already authenticated, show a different message
-  if (authenticated) {
+  if (invite.kind === 'loading') {
     return (
-      <div className="max-w-md mx-auto mt-12">
-        <div className="bg-gray-800 rounded-xl p-6 text-center border border-gray-700">
-          <div className="text-4xl mb-4">Done!</div>
-          <h2 className="text-xl font-semibold text-green-400 mb-2">You're signed in!</h2>
-          <p className="text-gray-400 mb-4">
-            You're now signed in as <span className="text-cyan-400 font-medium">{memberName}</span>.
+      <div className="max-w-md mx-auto mt-12 bg-gray-800 rounded-xl p-6 border border-gray-700 text-center">
+        <p className="text-gray-400">Validating invite…</p>
+      </div>
+    );
+  }
+
+  if (invite.kind === 'error') {
+    return (
+      <div className="max-w-md mx-auto mt-12 bg-gray-800 rounded-xl p-6 border border-gray-700 text-center">
+        <h2 className="text-xl font-semibold text-red-400 mb-2">Invite unavailable</h2>
+        <p className="text-gray-400 mb-4">{invite.message}</p>
+        <button
+          onClick={() => navigate('/')}
+          className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg"
+        >
+          Go home
+        </button>
+      </div>
+    );
+  }
+
+  if (success === 'group') {
+    return (
+      <div className="max-w-md mx-auto mt-12 bg-gray-800 rounded-xl p-6 border border-gray-700 text-center">
+        <h2 className="text-xl font-semibold text-green-400 mb-2">Joined!</h2>
+        <p className="text-gray-400">Loading the group…</p>
+      </div>
+    );
+  }
+
+  if (success === 'passkey') {
+    return (
+      <div className="max-w-md mx-auto mt-12 bg-gray-800 rounded-xl p-6 border border-gray-700 text-center">
+        <h2 className="text-xl font-semibold text-green-400 mb-2">Signed in!</h2>
+        <p className="text-gray-400">Redirecting…</p>
+      </div>
+    );
+  }
+
+  // ============ GROUP INVITE ============
+  if (invite.kind === 'group') {
+    const { preview } = invite;
+
+    if (!authenticated) {
+      return (
+        <div className="max-w-md mx-auto mt-12 bg-gray-800 rounded-xl p-6 border border-gray-700 text-center">
+          <h2 className="text-xl font-semibold text-gray-100 mb-2">Join {preview.groupName}</h2>
+          <p className="text-sm text-gray-400 mb-4">
+            {preview.memberCount} member{preview.memberCount === 1 ? '' : 's'} are already in this group.
           </p>
+          <p className="text-sm text-gray-400 mb-6">
+            Sign in (or create an account) first, then come back to this link to join.
+          </p>
+          <p className="text-xs text-gray-500 mb-4">Use the Sign In / New User buttons in the top-right.</p>
           <button
             onClick={() => navigate('/')}
-            className="px-4 py-2 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700"
+            className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg"
           >
-            Go Home
+            Go to sign-in
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="max-w-md mx-auto mt-8 bg-gray-800 rounded-xl p-6 border border-gray-700">
+        <h2 className="text-xl font-semibold text-gray-100 mb-1">Join {preview.groupName}</h2>
+        <p className="text-sm text-gray-400 mb-6">
+          {preview.memberCount} member{preview.memberCount === 1 ? '' : 's'} are already in this group.
+        </p>
+
+        <label className="block text-sm text-gray-300 mb-1">Your display name in this group</label>
+        <input
+          type="text"
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          placeholder={session?.userName ?? 'Your name'}
+          className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-100 mb-2"
+        />
+        <p className="text-xs text-gray-500 mb-6">
+          Can differ per group. Defaults to your profile name.
+        </p>
+
+        {pageError && (
+          <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-lg">
+            <p className="text-sm text-red-300">{pageError}</p>
+          </div>
+        )}
+
+        <div className="flex gap-3">
+          <button
+            onClick={() => navigate('/')}
+            className="flex-1 py-2.5 border border-gray-600 hover:bg-gray-800 text-gray-300 rounded-lg"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleAcceptGroupInvite}
+            disabled={submitting}
+            className="flex-1 py-2.5 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-lg font-medium"
+          >
+            {submitting ? 'Joining…' : 'Join group'}
           </button>
         </div>
       </div>
     );
   }
 
+  // ============ PASSKEY-DEVICE INVITE (legacy flow) ============
+  if (authenticated) {
+    return (
+      <div className="max-w-md mx-auto mt-12 bg-gray-800 rounded-xl p-6 border border-gray-700 text-center">
+        <h2 className="text-xl font-semibold text-green-400 mb-2">Already signed in</h2>
+        <p className="text-gray-400 mb-4">
+          You're signed in as <span className="text-cyan-400 font-medium">{session?.userName}</span>.
+        </p>
+        <button
+          onClick={() => navigate('/')}
+          className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg"
+        >
+          Go home
+        </button>
+      </div>
+    );
+  }
+
+  const { userName } = invite;
   return (
-    <div className="max-w-md mx-auto mt-12">
-      <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
-        {status === 'loading' && (
-          <div className="text-center">
-            <div className="text-4xl mb-4 animate-pulse">...</div>
-            <p className="text-gray-400">Validating invite...</p>
-          </div>
-        )}
+    <div className="max-w-md mx-auto mt-12 bg-gray-800 rounded-xl p-6 border border-gray-700">
+      {mode === 'choose' && (
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-gray-100 mb-2">Sign in as {userName}</h2>
+          <p className="text-sm text-gray-400 mb-6">How would you like to sign in on this device?</p>
 
-        {status === 'ready' && mode === 'choose' && (
-          <div className="text-center">
-            <div className="text-4xl mb-4">+</div>
-            <h2 className="text-xl font-semibold text-gray-100 mb-2">Join as {memberName}</h2>
-            <p className="text-gray-400 mb-6">
-              How would you like to sign in on this device?
-            </p>
-
-            {(error || webAuthnError) && (
-              <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-lg">
-                <p className="text-sm text-red-300">{error || webAuthnError}</p>
-              </div>
-            )}
-
-            <div className="space-y-3">
-              <button
-                onClick={() => setMode('existing-passkey')}
-                className="w-full px-4 py-3 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 font-medium"
-              >
-                Use existing passkey
-              </button>
-              <p className="text-xs text-gray-500">
-                If you already have a passkey for this account on this device
-              </p>
-
-              <div className="relative py-2">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-600"></div>
-                </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-gray-800 text-gray-400">or</span>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setMode('new-passkey')}
-                className="w-full px-4 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-500 font-medium"
-              >
-                Create new passkey
-              </button>
-              <p className="text-xs text-gray-500">
-                Register a new passkey on this device
-              </p>
+          {(pageError || webAuthnError) && (
+            <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-lg">
+              <p className="text-sm text-red-300">{pageError || webAuthnError}</p>
             </div>
-          </div>
-        )}
+          )}
 
-        {status === 'ready' && mode === 'existing-passkey' && (
-          <div className="text-center">
-            <div className="text-4xl mb-4">*</div>
-            <h2 className="text-xl font-semibold text-gray-100 mb-2">Use Existing Passkey</h2>
-            <p className="text-gray-400 mb-6">
-              Sign in with a passkey you've already registered for <span className="text-cyan-400 font-medium">{memberName}</span>.
-            </p>
-
-            {(error || webAuthnError) && (
-              <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-lg">
-                <p className="text-sm text-red-300">{error || webAuthnError}</p>
-              </div>
-            )}
-
-            <div className="space-y-3">
-              <button
-                onClick={handleUseExistingPasskey}
-                disabled={webAuthnLoading}
-                className="w-full px-4 py-3 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 disabled:opacity-50 font-medium"
-              >
-                {webAuthnLoading ? 'Signing in...' : 'Sign in with passkey'}
-              </button>
-              <button
-                onClick={handleBack}
-                disabled={webAuthnLoading}
-                className="w-full px-4 py-2 text-gray-400 hover:text-gray-300"
-              >
-                Back
-              </button>
-            </div>
-          </div>
-        )}
-
-        {status === 'ready' && mode === 'new-passkey' && (
-          <div className="text-center">
-            <div className="text-4xl mb-4">+</div>
-            <h2 className="text-xl font-semibold text-gray-100 mb-2">Create New Passkey</h2>
-            <p className="text-gray-400 mb-6">
-              Register a new passkey for <span className="text-cyan-400 font-medium">{memberName}</span> on this device.
-            </p>
-
-            {(error || webAuthnError) && (
-              <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-lg">
-                <p className="text-sm text-red-300">{error || webAuthnError}</p>
-              </div>
-            )}
-
-            <div className="mb-6">
-              <label className="block text-sm text-gray-400 mb-2 text-left">
-                Device name (optional)
-              </label>
-              <input
-                type="text"
-                value={friendlyName}
-                onChange={(e) => setFriendlyName(e.target.value)}
-                placeholder="e.g., My iPhone"
-                className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-100"
-                disabled={webAuthnLoading}
-              />
-            </div>
-
-            <div className="space-y-3">
-              <button
-                onClick={handleCreateNewPasskey}
-                disabled={webAuthnLoading}
-                className="w-full px-4 py-3 bg-cyan-600 text-white rounded-lg hover:bg-cyan-700 disabled:opacity-50 font-medium"
-              >
-                {webAuthnLoading ? 'Creating...' : 'Create passkey'}
-              </button>
-              <button
-                onClick={handleBack}
-                disabled={webAuthnLoading}
-                className="w-full px-4 py-2 text-gray-400 hover:text-gray-300"
-              >
-                Back
-              </button>
-            </div>
-          </div>
-        )}
-
-        {status === 'registering' && (
-          <div className="text-center">
-            <div className="text-4xl mb-4 animate-pulse">...</div>
-            <p className="text-gray-400">
-              {mode === 'existing-passkey'
-                ? 'Complete the sign-in on your device...'
-                : 'Complete the passkey registration on your device...'}
-            </p>
-          </div>
-        )}
-
-        {status === 'success' && (
-          <div className="text-center">
-            <div className="text-4xl mb-4">Done!</div>
-            <h2 className="text-xl font-semibold text-green-400 mb-2">
-              {mode === 'existing-passkey' ? 'Signed In!' : 'Passkey Added!'}
-            </h2>
-            <p className="text-gray-400">Redirecting to home...</p>
-          </div>
-        )}
-
-        {status === 'error' && (
-          <div className="text-center">
-            <div className="text-4xl mb-4">x</div>
-            <h2 className="text-xl font-semibold text-red-400 mb-2">Error</h2>
-            <p className="text-gray-400 mb-4">{error || webAuthnError}</p>
+          <div className="space-y-3">
             <button
-              onClick={() => navigate('/')}
-              className="px-4 py-2 bg-gray-700 text-white rounded-lg hover:bg-gray-600"
+              onClick={() => setMode('existing-passkey')}
+              className="w-full py-3 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg font-medium"
             >
-              Go Home
+              Use existing passkey
+            </button>
+            <button
+              onClick={() => setMode('new-passkey')}
+              className="w-full py-3 bg-gray-600 hover:bg-gray-500 text-white rounded-lg font-medium"
+            >
+              Create new passkey
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+
+      {mode === 'existing-passkey' && (
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-gray-100 mb-6">
+            Sign in as <span className="text-cyan-400">{userName}</span>
+          </h2>
+          {(pageError || webAuthnError) && (
+            <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-lg">
+              <p className="text-sm text-red-300">{pageError || webAuthnError}</p>
+            </div>
+          )}
+          <button
+            onClick={handleUseExistingPasskey}
+            disabled={webAuthnLoading}
+            className="w-full py-3 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-lg font-medium mb-2"
+          >
+            {webAuthnLoading ? 'Signing in…' : 'Sign in with passkey'}
+          </button>
+          <button onClick={() => setMode('choose')} className="text-gray-400 hover:text-gray-200 text-sm">
+            Back
+          </button>
+        </div>
+      )}
+
+      {mode === 'new-passkey' && (
+        <div className="text-center">
+          <h2 className="text-xl font-semibold text-gray-100 mb-6">
+            Add a passkey for <span className="text-cyan-400">{userName}</span>
+          </h2>
+          <label className="block text-sm text-gray-400 mb-1 text-left">Device name (optional)</label>
+          <input
+            type="text"
+            value={friendlyName}
+            onChange={(e) => setFriendlyName(e.target.value)}
+            placeholder="e.g. My iPhone"
+            className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-100 mb-4"
+            disabled={webAuthnLoading}
+          />
+          {(pageError || webAuthnError) && (
+            <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-lg">
+              <p className="text-sm text-red-300">{pageError || webAuthnError}</p>
+            </div>
+          )}
+          <button
+            onClick={handleCreateNewPasskey}
+            disabled={webAuthnLoading}
+            className="w-full py-3 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-lg font-medium mb-2"
+          >
+            {webAuthnLoading ? 'Creating…' : 'Create passkey'}
+          </button>
+          <button onClick={() => setMode('choose')} className="text-gray-400 hover:text-gray-200 text-sm">
+            Back
+          </button>
+        </div>
+      )}
     </div>
   );
 }

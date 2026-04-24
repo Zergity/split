@@ -4,8 +4,9 @@ import { useApp } from '../context/AppContext';
 import { ReceiptItems } from '../components/ReceiptItems';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ReceiptItem, DiscountType } from '../types';
-import { roundNumber, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal } from '../utils/balances';
+import { roundNumber, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal, parseDecimal } from '../utils/balances';
 import { YouBadge } from '../components/YouBadge';
+import { ShareControl } from '../components/ShareControl';
 
 export function EditExpense() {
   const navigate = useNavigate();
@@ -87,7 +88,18 @@ export function EditExpense() {
   }, [billGoc, discount, discountType, splitMode]);
 
   const totalShares = Object.values(memberShares).reduce((sum, s) => sum + s, 0);
-  const allSharesEqual = totalShares > 0 && Object.values(memberShares).every(s => s === 1);
+  // Reference values for the −/+ smart-jump: unique configured shares on the
+  // group's members, ascending.
+  const configuredShareValues = useMemo(() => {
+    if (!group) return [1];
+    return [...new Set(group.members.map((m) => m.share ?? 1))].sort((a, b) => a - b);
+  }, [group]);
+  // "Split" when every member's share equals their configured group share (or 1 if unset).
+  const allAtDefaultRates = Object.entries(memberShares).length > 0 &&
+    Object.entries(memberShares).every(([memberId, share]) => {
+      const rate = group?.members.find(m => m.id === memberId)?.share ?? 1;
+      return share === rate;
+    });
 
   const includedMemberIds = splitMode === 'items'
     ? new Set(items.filter(i => i.memberId).map(i => i.memberId!))
@@ -137,7 +149,7 @@ export function EditExpense() {
   };
 
   const handleTotalChange = (value: string) => {
-    const parsed = parseFloat(value);
+    const parsed = parseDecimal(value);
     if (!isNaN(parsed) && parsed >= 0) {
       const newBillGoc = calculateBillGoc(parsed, discount, discountType);
       const currentBillGoc = items.reduce((sum, i) => sum + i.amount, 0);
@@ -171,6 +183,58 @@ export function EditExpense() {
     }
   };
 
+  const allMembersSelected =
+    !!group && group.members.length > 0 && includedMemberIds.size === group.members.length;
+
+  // Bulk select/deselect every member. Mirrors the per-member-tap rules:
+  // shares mode requires isPayer; items mode respects canOnlyAssign
+  // (assign-only callers cannot clear existing assignments or create new items).
+  const handleToggleAll = () => {
+    if (!group) return;
+    if (allMembersSelected) {
+      if (splitMode === 'shares') {
+        if (!isPayer) return;
+        setMemberShares({});
+      } else {
+        if (canOnlyAssign) return;
+        handleItemsChange(items.map(item => ({ ...item, memberId: undefined })));
+      }
+    } else {
+      if (splitMode === 'shares') {
+        if (!isPayer) return;
+        setMemberShares(prev => {
+          const next = { ...prev };
+          group.members.forEach(m => {
+            if (!(m.id in next)) next[m.id] = m.share ?? 1;
+          });
+          return next;
+        });
+      } else {
+        // Items mode: assign any free slots first, then fall back to creating
+        // new zero-amount items (matching handleMemberTap's single-member path).
+        const newItems = [...items];
+        const freeSlots = newItems
+          .map((item, idx) => ({ item, idx }))
+          .filter(x => !x.item.memberId);
+        const missing = group.members.filter(m => !includedMemberIds.has(m.id));
+        for (const m of missing) {
+          const slot = freeSlots.shift();
+          if (slot) {
+            newItems[slot.idx] = { ...newItems[slot.idx], memberId: m.id };
+          } else if (!canOnlyAssign) {
+            newItems.push({
+              id: crypto.randomUUID(),
+              description: '',
+              amount: 0,
+              memberId: m.id,
+            });
+          }
+        }
+        handleItemsChange(newItems);
+      }
+    }
+  };
+
   const handleMemberTap = (memberId: string) => {
     if (splitMode === 'shares') {
       if (!isPayer) return;
@@ -179,7 +243,8 @@ export function EditExpense() {
         if (memberId in newShares) {
           delete newShares[memberId];
         } else {
-          newShares[memberId] = 1;
+          const rate = group?.members.find(m => m.id === memberId)?.share ?? 1;
+          newShares[memberId] = rate;
         }
         return newShares;
       });
@@ -401,7 +466,7 @@ export function EditExpense() {
   };
 
   return (
-    <div className="pb-20">
+    <div>
       <h2 className="text-xl font-bold mb-6">
         Edit Transaction {isPayer ? '(as Payer)' : isCreator ? '(as Creator)' : '(as Participant)'}
       </h2>
@@ -478,6 +543,17 @@ export function EditExpense() {
             </label>
 
             <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleToggleAll}
+                className={`px-3 py-1.5 rounded-full text-sm select-none transition-colors ${
+                  allMembersSelected
+                    ? 'bg-cyan-700 text-white hover:bg-red-500 font-semibold'
+                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                }`}
+              >
+                All
+              </button>
               {group.members.map((member) => {
                 const isIncluded = includedMemberIds.has(member.id);
                 const isYou = currentUser && member.id === currentUser.id;
@@ -511,13 +587,13 @@ export function EditExpense() {
           <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
             <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Total</span>
             <input
-              type="number"
+              type="text" inputMode="decimal"
               min="0"
               value={totalAmount || ''}
               disabled={canOnlyAssign || canOnlyEditOwnItems}
               onChange={(e) => {
                 if (splitMode === 'shares') {
-                  const parsed = parseFloat(e.target.value);
+                  const parsed = parseDecimal(e.target.value);
                   if (!isNaN(parsed) && parsed >= 0) {
                     setTotalAmount(parsed);
                   } else if (e.target.value === '' || e.target.value === '0') {
@@ -552,12 +628,12 @@ export function EditExpense() {
             <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden mt-2">
               <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Discount</span>
               <input
-                type="number"
+                type="text" inputMode="decimal"
                 min="0"
                 autoFocus
                 value={discount || ''}
                 onChange={(e) => {
-                  const raw = e.target.value ? parseFloat(e.target.value) : undefined;
+                  const raw = e.target.value ? parseDecimal(e.target.value) : undefined;
                   if (discountType === 'flat') {
                     setDiscount(raw && raw > 0 ? raw : undefined);
                   } else {
@@ -646,7 +722,7 @@ export function EditExpense() {
                   }}
                   className="text-sm text-cyan-400 hover:text-cyan-300"
                 >
-                  Split equally
+                  Split
                 </button>
               )}
             </div>
@@ -669,7 +745,7 @@ export function EditExpense() {
             <div className="flex justify-between items-center mb-2">
               <label className="block text-sm font-medium text-gray-300">Shares</label>
               <span className="text-sm text-gray-500 italic">
-                {allSharesEqual ? 'All equal' : `Total: ${totalShares} shares`}
+                {allAtDefaultRates ? 'Split' : `Total: ${totalShares} shares`}
               </span>
             </div>
 
@@ -691,23 +767,13 @@ export function EditExpense() {
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-green-400 font-medium">{memberAmount.toLocaleString()}{group.currency}</span>
-                      {isPayer && (
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            disabled={share <= 1}
-                            onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: Math.max(1, prev[memberId] - 1) }))}
-                            className="w-7 h-7 flex items-center justify-center bg-gray-700 rounded-md text-white disabled:opacity-40"
-                          >−</button>
-                          <span className="text-lg font-bold text-white min-w-[22px] text-center">{share}</span>
-                          <button
-                            type="button"
-                            onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: prev[memberId] + 1 }))}
-                            className="w-7 h-7 flex items-center justify-center bg-cyan-600 rounded-md text-white"
-                          >+</button>
-                        </div>
-                      )}
-                      {!isPayer && (
+                      {isPayer ? (
+                        <ShareControl
+                          value={share}
+                          configuredValues={configuredShareValues}
+                          onChange={(v) => setMemberShares(prev => ({ ...prev, [memberId]: v }))}
+                        />
+                      ) : (
                         <span className="text-lg font-bold text-white min-w-[22px] text-center">{share}</span>
                       )}
                     </div>

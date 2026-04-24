@@ -1,6 +1,9 @@
-// Member of the group
+// Member of a group. `userId` links a member row to a global User identity
+// (present once the member has claimed a passkey). Legacy pre-existing
+// members have userId === id.
 export interface Member {
   id: string;
+  userId?: string;
   name: string;
   avatarSeed?: string;
   // Optional bank account fields
@@ -9,6 +12,11 @@ export interface Member {
   bankShortName?: string;
   accountName?: string;
   accountNo?: string;
+  joinedAt?: string;
+  removedAt?: string;
+  // Weight factor for the default "Split" method. Missing/≤0 treated as 1.
+  // Applied proportionally: Alice=2, Bob=1 → Alice pays 2/3, Bob pays 1/3.
+  share?: number;
 }
 
 // Bank information
@@ -20,13 +28,36 @@ export interface Bank {
   logo: string;
 }
 
-// The single expense group
+// An expense group. `admins` is the list of member ids with admin rights
+// (create invites, rename, remove members, transfer admin). `removedMembers`
+// preserves history — members still referenced by old expenses remain resolvable.
 export interface Group {
   id: string;
   name: string;
   currency: string;
   members: Member[];
+  admins: string[];
+  removedMembers: Member[];
+  createdBy?: string;
   createdAt: string;
+}
+
+// Summary of a group as returned by GET /api/groups (one entry per membership).
+export interface GroupSummary {
+  id: string;
+  name: string;
+  memberId: string;
+  memberCount: number;
+  isAdmin: boolean;
+}
+
+// Permanent group invite.
+export interface GroupInvite {
+  code: string;
+  groupId: string;
+  createdBy: string;
+  createdAt: string;
+  note?: string;
 }
 
 // Split types
@@ -110,8 +141,8 @@ export interface Settlement {
 
 // Auth types
 export interface SessionInfo {
-  memberId: string;
-  memberName: string;
+  userId: string;
+  userName: string;
   expiresAt: string;
 }
 

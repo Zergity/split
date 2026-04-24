@@ -3,7 +3,20 @@ import type { AuthEnv, RegisterVerifyRequest, StoredCredential } from '../../typ
 import { consumeChallenge } from '../../utils/challenges';
 import { addCredential } from '../../utils/credentials';
 import { createSession, createAuthCookie } from '../../utils/jwt';
+import {
+  LEGACY_GROUP_ID,
+  GroupMember,
+  getGroup,
+  saveGroup,
+} from '../../utils/groups';
+import { createUser, getUser, saveUser, addMembership } from '../../utils/users';
 
+// This endpoint only registers new members into the legacy '1matrix' group
+// (where userId === memberId). Joining any other group goes through the
+// invite-accept flow at /api/groups/invites/:code, which gates on a valid
+// invite code and reuses the caller's existing userId. Accepting a
+// client-supplied groupId here would let an unauthenticated caller bind a
+// passkey to an arbitrary member row in any group.
 export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
   try {
     const { memberId, memberName, credential, friendlyName } =
@@ -17,6 +30,7 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     }
 
     const env = context.env;
+    const targetGroupId = LEGACY_GROUP_ID;
 
     // Get and consume the challenge (one-time use)
     const expectedChallenge = await consumeChallenge(env, memberId, 'registration');
@@ -27,14 +41,9 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    // Determine origin from request or env
     const origin = env.RP_ORIGIN || new URL(context.request.url).origin;
     const rpID = env.RP_ID || 'localhost';
 
-    console.log('[reg/verify] JWT_SECRET present:', !!env.JWT_SECRET, 'len:', env.JWT_SECRET?.length);
-    console.log('[reg/verify] origin:', origin, 'rpID:', rpID);
-
-    // Verify the registration response
     const verification = await verifyRegistrationResponse({
       response: credential,
       expectedChallenge,
@@ -49,34 +58,89 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    const { registrationInfo } = verification;
+    // Legacy 1matrix invariant: userId === memberId. Credentials stored under
+    // 'credentials:<memberId>' on main remain readable after this PR.
+    const userId = memberId;
 
-    // Store the credential - use credential.id from client (already base64url)
+    // Upsert the User record.
+    let user = await getUser(env, userId);
+    if (!user) {
+      user = await createUser(env, { id: userId, name: memberName });
+    } else if (user.name !== memberName) {
+      user = { ...user, name: memberName };
+      await saveUser(env, user);
+    }
+
+    // Ensure the group exists and the member row points at this user.
+    const group = await getGroup(env, targetGroupId);
+    if (!group) {
+      return Response.json(
+        { success: false, error: `Group ${targetGroupId} not found` },
+        { status: 404 }
+      );
+    }
+
+    const existingMemberIdx = group.members.findIndex((m) => m.id === memberId);
+    const now = new Date().toISOString();
+    if (existingMemberIdx === -1) {
+      // Fresh legacy-group member — insert. (The caller-side flow creates the
+      // placeholder row via addMember before calling this endpoint, so in
+      // practice the row already exists; guard for the first-member case.)
+      const newMember: GroupMember = {
+        id: memberId,
+        userId,
+        name: memberName,
+        joinedAt: now,
+      };
+      group.members.push(newMember);
+    } else {
+      const existing = group.members[existingMemberIdx];
+      // Refuse to rebind a member row that's already claimed by a different
+      // user. In legacy this can't happen (userId === memberId invariant);
+      // the check is defense-in-depth for stale/promoted data.
+      if (existing.userId && existing.userId !== userId) {
+        return Response.json(
+          { success: false, error: 'Member is already claimed' },
+          { status: 409 }
+        );
+      }
+      group.members[existingMemberIdx] = {
+        ...existing,
+        userId,
+        name: memberName,
+        joinedAt: existing.joinedAt ?? now,
+      };
+    }
+    await saveGroup(env, group);
+    await addMembership(env, userId, {
+      groupId: targetGroupId,
+      memberId,
+      joinedAt: now,
+    });
+
+    const { registrationInfo } = verification;
     const storedCredential: StoredCredential = {
-      id: credential.id, // Use the ID from client response directly
+      id: credential.id,
       publicKey: registrationInfo.credential.publicKey,
       counter: registrationInfo.credential.counter,
       deviceType: registrationInfo.credentialDeviceType,
       backedUp: registrationInfo.credentialBackedUp,
       transports: credential.response.transports,
-      createdAt: new Date().toISOString(),
+      createdAt: now,
       friendlyName: friendlyName || getDefaultFriendlyName(context.request),
     };
+    await addCredential(env, userId, storedCredential);
 
-    await addCredential(env, memberId, storedCredential);
+    const { session, token } = await createSession(env, userId, user.name);
 
-    // Create session
-    const { session, token } = await createSession(env, memberId, memberName);
-
-    // Set cookie and return response
     return new Response(
       JSON.stringify({
         success: true,
         data: {
           verified: true,
           session: {
-            memberId: session.memberId,
-            memberName: session.memberName,
+            userId: session.userId,
+            userName: session.userName,
             expiresAt: session.expiresAt,
           },
         },
@@ -98,16 +162,13 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
   }
 };
 
-// Helper to get a default friendly name from the request
 function getDefaultFriendlyName(request: Request): string {
   const userAgent = request.headers.get('User-Agent') || '';
-
   if (userAgent.includes('iPhone')) return 'iPhone';
   if (userAgent.includes('iPad')) return 'iPad';
   if (userAgent.includes('Mac')) return 'Mac';
   if (userAgent.includes('Android')) return 'Android';
   if (userAgent.includes('Windows')) return 'Windows';
   if (userAgent.includes('Linux')) return 'Linux';
-
   return 'Passkey';
 }

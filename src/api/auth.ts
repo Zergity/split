@@ -34,11 +34,12 @@ async function fetchAuthApi<T>(
   return data.data as T;
 }
 
-// Check if member has passkeys registered
-export async function checkHasPasskeys(memberId: string): Promise<boolean> {
+// Check if a user has passkeys registered. Accepts userId (new) or memberId
+// (legacy — for the pre-multi-group single-group flow these are equal).
+export async function checkHasPasskeys(userIdOrMemberId: string): Promise<boolean> {
   const result = await fetchAuthApi<{ hasPasskeys: boolean }>('/check', {
     method: 'POST',
-    body: JSON.stringify({ memberId }),
+    body: JSON.stringify({ userId: userIdOrMemberId }),
   });
   return result.hasPasskeys;
 }
@@ -46,7 +47,7 @@ export async function checkHasPasskeys(memberId: string): Promise<boolean> {
 // Registration
 export async function getRegistrationOptions(
   memberId: string,
-  memberName: string
+  memberName: string,
 ): Promise<PublicKeyCredentialCreationOptionsJSON> {
   const result = await fetchAuthApi<{ options: PublicKeyCredentialCreationOptionsJSON }>(
     '/register/options',
@@ -62,7 +63,7 @@ export async function verifyRegistration(
   memberId: string,
   memberName: string,
   credential: unknown,
-  friendlyName?: string
+  friendlyName?: string,
 ): Promise<SessionInfo> {
   const result = await fetchAuthApi<{ verified: boolean; session: SessionInfo }>(
     '/register/verify',
@@ -181,8 +182,8 @@ export async function createPasskeyInvite(): Promise<PasskeyInviteInfo> {
 
 export async function getInvitePasskeyOptions(
   inviteCode: string
-): Promise<{ options: PublicKeyCredentialCreationOptionsJSON; memberName: string }> {
-  return fetchAuthApi<{ options: PublicKeyCredentialCreationOptionsJSON; memberName: string }>(
+): Promise<{ options: PublicKeyCredentialCreationOptionsJSON; userName: string }> {
+  return fetchAuthApi<{ options: PublicKeyCredentialCreationOptionsJSON; userName: string }>(
     '/passkeys/invite/options',
     {
       method: 'POST',

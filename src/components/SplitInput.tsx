@@ -229,7 +229,7 @@ export function SplitInput({
               </span>
               <div className="flex items-center gap-1">
                 <input
-                  type="number"
+                  type="text" inputMode="decimal"
                   value={amountValue}
                   onChange={(e) => onAmountChange(e.target.value)}
                   placeholder="0"

@@ -5,8 +5,10 @@
  */
 import type { AuthEnv, PushSubscriptionRecord, NotificationRecord, NotifyPrefs, NotifyEvent } from '../types/auth';
 import { KV_KEYS, DEFAULT_NOTIFY_PREFS } from '../types/auth';
+import type { GroupRecord } from './groups';
+import { findMember } from './groups';
 
-const MAX_NOTIFICATIONS = 50; // Keep last 50 per member
+const MAX_NOTIFICATIONS = 50; // Keep last 50 per (user, group)
 
 // --- Base64url helpers ---
 
@@ -241,18 +243,30 @@ export async function sendPushNotification(
   }
 }
 
+// Send a notification to a set of members of a specific group.
+// Resolves memberId → userId via the group record, then writes history and
+// delivers push using (userId, groupId)-scoped KV keys.
 export async function notifyMembers(
   env: AuthEnv,
+  group: GroupRecord,
   memberIds: string[],
   payload: { title: string; body: string; url?: string; tag?: string },
   event?: NotifyEvent,
 ): Promise<void> {
-  console.log(`[push] Notifying ${memberIds.length} members:`, memberIds);
+  const resolved = memberIds
+    .map((memberId) => {
+      const m = findMember(group, memberId);
+      return m?.userId ? { memberId, userId: m.userId } : null;
+    })
+    .filter((x): x is { memberId: string; userId: string } => x !== null);
+
+  console.log(`[push] Notifying ${resolved.length}/${memberIds.length} members in group ${group.id}`);
   const tasks: Promise<void>[] = [];
 
-  // Save notification history for all members (regardless of push subscription or prefs)
-  for (const memberId of memberIds) {
-    const notiKey = KV_KEYS.notifications(memberId);
+  // Save notification history — scoped per (userId, groupId) so users only see
+  // their active group's notifications in the bell.
+  for (const { userId } of resolved) {
+    const notiKey = KV_KEYS.notifications(userId, group.id);
     const existing = (await env.SPLITTER_KV.get<NotificationRecord[]>(notiKey, 'json')) || [];
     const record: NotificationRecord = {
       id: crypto.randomUUID(),
@@ -266,25 +280,22 @@ export async function notifyMembers(
     await env.SPLITTER_KV.put(notiKey, JSON.stringify(updated));
   }
 
-  for (const memberId of memberIds) {
-    // Check push notification prefs before sending
+  for (const { userId } of resolved) {
     if (event) {
-      const prefs = await env.SPLITTER_KV.get<NotifyPrefs>(KV_KEYS.pushPrefs(memberId), 'json') ?? DEFAULT_NOTIFY_PREFS;
+      const prefs = await env.SPLITTER_KV.get<NotifyPrefs>(
+        KV_KEYS.pushPrefs(userId, group.id),
+        'json',
+      ) ?? DEFAULT_NOTIFY_PREFS;
       if (!prefs[event]) continue;
     }
-    const key = KV_KEYS.pushSubscriptions(memberId);
+    const key = KV_KEYS.pushSubscriptions(userId, group.id);
     const subscriptions = await env.SPLITTER_KV.get<PushSubscriptionRecord[]>(key, 'json');
-    if (!subscriptions || subscriptions.length === 0) {
-      console.log(`[push] No subscriptions for member ${memberId}`);
-      continue;
-    }
-    console.log(`[push] Member ${memberId} has ${subscriptions.length} subscription(s)`);
+    if (!subscriptions || subscriptions.length === 0) continue;
 
     for (const sub of subscriptions) {
       tasks.push(
         sendPushNotification(env, sub, payload).then(async (result) => {
           if (result === 'expired') {
-            // Only remove subscription if push service says it's gone (410/404)
             const current =
               (await env.SPLITTER_KV.get<PushSubscriptionRecord[]>(key, 'json')) || [];
             const updated = current.filter((s: PushSubscriptionRecord) => s.endpoint !== sub.endpoint);

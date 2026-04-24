@@ -31,8 +31,8 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     const now = Date.now();
     const invite: PasskeyInvite = {
       inviteCode,
-      memberId: session.memberId,
-      memberName: session.memberName,
+      userId: session.userId,
+      userName: session.userName,
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + INVITE_TTL_SECONDS * 1000).toISOString(),
     };

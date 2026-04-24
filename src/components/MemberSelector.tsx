@@ -32,7 +32,12 @@ export function MemberSelector() {
     if (authLoading || !group) return;
 
     if (authenticated && session) {
-      const member = group.members.find((m) => m.id === session.memberId);
+      // Find the caller's member row in the active group. Legacy 1matrix
+      // members have userId === id so the first lookup matches; for joined
+      // groups, userId is the authoritative link.
+      const member =
+        group.members.find((m) => m.userId === session.userId) ??
+        group.members.find((m) => m.id === session.userId);
       if (member) {
         // Update if ID changed OR name changed
         if (currentUser?.id !== member.id || currentUser?.name !== member.name) {

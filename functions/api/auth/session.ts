@@ -41,8 +41,8 @@ export const onRequestGet: PagesFunction<AuthEnv> = async (context) => {
       data: {
         authenticated: true,
         session: {
-          memberId: session.memberId,
-          memberName: session.memberName,
+          userId: session.userId,
+          userName: session.userName,
           expiresAt: session.expiresAt,
         },
       },

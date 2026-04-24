@@ -1,6 +1,7 @@
 import type { AuthEnv } from '../types/auth';
-import { getTokenFromCookies, verifySession } from '../utils/jwt';
-import { notifyMembers } from '../utils/web-push';
+import { requireGroup } from '../utils/session';
+import { getExpenses, saveExpenses, GroupRecord, findMember } from '../utils/groups';
+import { notifyMembers as notifyPush } from '../utils/web-push';
 import { notifyMembers as notifyTelegram, sendDebouncedEditNotification } from '../utils/telegram';
 
 type SplitType = 'equal' | 'exact' | 'percentage' | 'shares' | 'settlement';
@@ -27,55 +28,38 @@ interface Expense {
   tags?: string[];
 }
 
-async function getExpenses(kv: KVNamespace): Promise<Expense[]> {
-  const expenses = await kv.get<Expense[]>('expenses', 'json');
-  return expenses || [];
-}
-
-async function saveExpenses(kv: KVNamespace, expenses: Expense[]): Promise<void> {
-  await kv.put('expenses', JSON.stringify(expenses));
-}
-
-interface Member {
-  id: string;
-  name: string;
-}
-
-interface Group {
-  currency: string;
-  members: Member[];
-}
-
-function getMemberName(members: Member[], id: string): string {
-  return members.find((m) => m.id === id)?.name ?? id;
+function getMemberName(group: GroupRecord, id: string): string {
+  return findMember(group, id)?.name ?? id;
 }
 
 function formatAmount(amount: number, currency: string): string {
   return `${amount.toLocaleString('vi-VN')} ${currency}`;
 }
 
+function memberIdsToUserIds(group: GroupRecord, memberIds: string[]): string[] {
+  const out: string[] = [];
+  for (const id of memberIds) {
+    const m = findMember(group, id);
+    if (m?.userId) out.push(m.userId);
+  }
+  return out;
+}
+
 async function sendEditNotification(
   env: AuthEnv,
+  group: GroupRecord,
   expense: Expense,
-  editorId: string | null,
+  editorMemberId: string | null,
   action: 'updated' | 'removed',
 ): Promise<void> {
   const involved = new Set<string>();
-  for (const split of expense.splits) {
-    involved.add(split.memberId);
-  }
+  for (const split of expense.splits) involved.add(split.memberId);
   involved.add(expense.paidBy);
-
-  if (editorId) {
-    involved.delete(editorId);
-  }
-
+  if (editorMemberId) involved.delete(editorMemberId);
   if (involved.size === 0) return;
 
-  const group = await env.SPLITTER_KV.get<Group>('group', 'json');
-  const members = group?.members ?? [];
-  const currency = group?.currency ?? '';
-  const editorName = editorId ? getMemberName(members, editorId) : 'Someone';
+  const currency = group.currency;
+  const editorName = editorMemberId ? getMemberName(group, editorMemberId) : 'Someone';
   const involvedIds = [...involved];
 
   const title = action === 'removed' ? 'Expense Removed' : 'Expense Updated';
@@ -83,9 +67,8 @@ async function sendEditNotification(
     ? `${editorName} removed "${expense.description}"`
     : `${editorName} updated "${expense.description}"`;
 
-  // Web push + in-app notification history
   try {
-    await notifyMembers(env, involvedIds, {
+    await notifyPush(env, group, involvedIds, {
       title,
       body,
       url: action === 'removed' ? '/expenses' : `/edit/${expense.id}`,
@@ -95,30 +78,31 @@ async function sendEditNotification(
     console.error('Failed to send push notifications:', err);
   }
 
-  // Telegram notifications
   try {
+    const editorUserId = editorMemberId ? (findMember(group, editorMemberId)?.userId ?? '') : '';
     if (action === 'updated') {
-      const payerName = getMemberName(members, expense.paidBy);
+      const payerName = getMemberName(group, expense.paidBy);
       const splitsDetail = expense.splits
-        .map((s) => `  • ${getMemberName(members, s.memberId)}: ${formatAmount(s.amount, currency)}`)
+        .map((s) => `  • ${getMemberName(group, s.memberId)}: ${formatAmount(s.amount, currency)}`)
         .join('\n');
+      const userIds = memberIdsToUserIds(group, expense.splits.map((s) => s.memberId));
       await sendDebouncedEditNotification(
         expense.id,
-        expense.splits.map((s) => s.memberId),
-        editorId ?? expense.paidBy,
+        userIds,
+        editorUserId,
         `✏️ <b>Expense updated</b>\n\n📌 ${expense.description}\n👤 Paid by: <b>${payerName}</b>\n✍️ Edited by: <b>${editorName}</b>\n💰 Total: <b>${formatAmount(expense.amount, currency)}</b>\n\n<b>Each member's share:</b>\n${splitsDetail}\n\n⚠️ Please confirm again.`,
         env,
         {
           inline_keyboard: [
-            [{ text: '✅ Confirm again', callback_data: `signoff:${expense.id}` }],
+            [{ text: '✅ Confirm again', callback_data: `signoff:${group.id}:${expense.id}` }],
           ],
         },
       );
     } else {
-      const memberIds = expense.splits.map((s) => s.memberId);
+      const userIds = memberIdsToUserIds(group, expense.splits.map((s) => s.memberId));
       await notifyTelegram(
-        memberIds,
-        editorId ?? expense.paidBy,
+        userIds,
+        editorUserId,
         'expenseDeleted',
         `🗑️ <b>Expense deleted</b>\n\n📌 ${expense.description}\n💰 Total: <b>${formatAmount(expense.amount, currency)}</b>\n🙍 Deleted by: <b>${editorName}</b>`,
         env,
@@ -131,9 +115,13 @@ async function sendEditNotification(
 
 export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
   try {
+    const ctx = await requireGroup(context.env, context.request);
+    if (ctx instanceof Response) return ctx;
+    const { group, member } = ctx;
+
     const id = context.params.id as string;
     const updates = (await context.request.json()) as Partial<Expense>;
-    const expenses = await getExpenses(context.env.SPLITTER_KV);
+    const expenses = (await getExpenses(context.env, group.id)) as Expense[];
 
     const index = expenses.findIndex((e) => e.id === id);
     if (index === -1) {
@@ -149,25 +137,15 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
       id: expenses[index].id,
       createdAt: expenses[index].createdAt,
     };
-
     const updatedExpense = expenses[index];
-    await saveExpenses(context.env.SPLITTER_KV, expenses);
-
-    // Get editor from session (best-effort, don't fail if not authenticated)
-    let editorId: string | null = null;
-    const token = getTokenFromCookies(context.request);
-    if (token) {
-      const session = await verifySession(context.env, token);
-      if (session) editorId = session.memberId;
-    }
+    await saveExpenses(context.env, group.id, expenses);
 
     const isDeleted = updatedExpense.tags?.includes('deleted');
-    context.waitUntil(sendEditNotification(context.env, updatedExpense, editorId, isDeleted ? 'removed' : 'updated'));
+    context.waitUntil(
+      sendEditNotification(context.env, group, updatedExpense, member.id, isDeleted ? 'removed' : 'updated'),
+    );
 
-    return Response.json({
-      success: true,
-      data: updatedExpense,
-    });
+    return Response.json({ success: true, data: updatedExpense });
   } catch (error) {
     return Response.json(
       { success: false, error: 'Failed to update expense' },
@@ -178,8 +156,12 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
 
 export const onRequestDelete: PagesFunction<AuthEnv> = async (context) => {
   try {
+    const ctx = await requireGroup(context.env, context.request);
+    if (ctx instanceof Response) return ctx;
+    const { group, member } = ctx;
+
     const id = context.params.id as string;
-    const expenses = await getExpenses(context.env.SPLITTER_KV);
+    const expenses = (await getExpenses(context.env, group.id)) as Expense[];
 
     const index = expenses.findIndex((e) => e.id === id);
     if (index === -1) {
@@ -191,20 +173,11 @@ export const onRequestDelete: PagesFunction<AuthEnv> = async (context) => {
 
     const deletedExpense = expenses[index];
     expenses.splice(index, 1);
-    await saveExpenses(context.env.SPLITTER_KV, expenses);
+    await saveExpenses(context.env, group.id, expenses);
 
-    // Send notifications for hard delete
-    let deletorId: string | null = null;
-    const token = getTokenFromCookies(context.request);
-    if (token) {
-      const session = await verifySession(context.env, token);
-      if (session) deletorId = session.memberId;
-    }
-    context.waitUntil(sendEditNotification(context.env, deletedExpense, deletorId, 'removed'));
+    context.waitUntil(sendEditNotification(context.env, group, deletedExpense, member.id, 'removed'));
 
-    return Response.json({
-      success: true,
-    });
+    return Response.json({ success: true });
   } catch (error) {
     return Response.json(
       { success: false, error: 'Failed to delete expense' },

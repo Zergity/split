@@ -5,8 +5,9 @@ import { ReceiptCapture } from '../components/ReceiptCapture';
 import { ReceiptItems } from '../components/ReceiptItems';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ReceiptItem, ReceiptOCRResult, DiscountType } from '../types';
-import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal } from '../utils/balances';
+import { roundNumber, getTagColor, calculateDiscountAmount, calculateBillGoc, distributeByShares, toLocalDatetimeInput, parseDatetimeLocal, parseDecimal } from '../utils/balances';
 import { YouBadge } from '../components/YouBadge';
+import { ShareControl } from '../components/ShareControl';
 
 export function AddExpense() {
   const navigate = useNavigate();
@@ -71,7 +72,22 @@ export function AddExpense() {
   const hasItems = items.length > 0;
 
   const totalShares = Object.values(memberShares).reduce((sum, s) => sum + s, 0);
-  const allSharesEqual = totalShares > 0 && Object.values(memberShares).every(s => s === 1);
+  // Reference share values for the −/+ smart-jump in shares mode: the unique
+  // configured shares across the group's active members, ascending.
+  const configuredShareValues = useMemo(() => {
+    if (!group) return [1];
+    return [...new Set(group.members.map((m) => m.share ?? 1))].sort((a, b) => a - b);
+  }, [group]);
+  // "All" is derived state: on when every group member is selected.
+  const allMembersSelected =
+    !!group && group.members.length > 0 && selectedMemberIds.size === group.members.length;
+  // "Split" when every included member's share equals their configured group
+  // share (or 1 if unset) — i.e. nobody has overridden the admin-set weights.
+  const allAtDefaultRates = Object.entries(memberShares).length > 0 &&
+    Object.entries(memberShares).every(([memberId, share]) => {
+      const rate = group?.members.find(m => m.id === memberId)?.share ?? 1;
+      return share === rate;
+    });
 
   const billGoc = useMemo(() => {
     if (splitMode !== 'items') return totalAmount;
@@ -106,7 +122,7 @@ export function AddExpense() {
 
   const handleTotalChange = (value: string) => {
     setHasManualTotal(true);
-    const parsed = parseFloat(value);
+    const parsed = parseDecimal(value);
     if (!isNaN(parsed) && parsed >= 0) {
       const newBillGoc = calculateBillGoc(parsed, discount, discountType);
       const currentBillGoc = items.reduce((sum, i) => sum + i.amount, 0);
@@ -140,10 +156,16 @@ export function AddExpense() {
       setHasManualTotal(false);
       setShowDiscountInput(false);
       const shares: Record<string, number> = {};
-      selectedMemberIds.forEach(id => { shares[id] = memberShares[id] ?? 1; });
+      selectedMemberIds.forEach(id => {
+        const rate = group?.members.find(m => m.id === id)?.share ?? 1;
+        shares[id] = memberShares[id] ?? rate;
+      });
       setMemberShares(shares);
     } else {
-      setMemberShares({});
+      // Keep memberShares in memory while in items mode — the user may toggle
+      // back and expect their manually-edited shares to still be there. The
+      // shares UI only renders entries for the currently selected members, so
+      // stale entries for deselected members are harmless.
       const placeholders: ReceiptItem[] = Array.from(selectedMemberIds).map(memberId => ({
         id: crypto.randomUUID(),
         description: '',
@@ -207,6 +229,40 @@ export function AddExpense() {
     setTotalAmount(0);
   };
 
+  // Bulk select/deselect every member. In shares mode, also populates/clears
+  // the per-member share map (using each member's configured share as the
+  // default). In items mode, deselecting-all unassigns every item.
+  const handleToggleAll = () => {
+    if (!group) return;
+    const allSelected =
+      group.members.length > 0 &&
+      selectedMemberIds.size === group.members.length;
+
+    if (allSelected) {
+      setSelectedMemberIds(new Set());
+      if (splitMode === 'shares') {
+        setMemberShares({});
+      } else {
+        handleItemsChange(items.map(item => ({ ...item, memberId: undefined })));
+      }
+    } else {
+      const allIds = new Set(group.members.map(m => m.id));
+      setSelectedMemberIds(allIds);
+      if (splitMode === 'shares') {
+        // Preserve already-edited share values; fill missing ones with the
+        // member's configured default.
+        setMemberShares(prev => {
+          const next = { ...prev };
+          group.members.forEach(m => {
+            if (!(m.id in next)) next[m.id] = m.share ?? 1;
+          });
+          return next;
+        });
+      }
+      // Items mode: selection only — user still assigns items by drag or tap.
+    }
+  };
+
   const handleMemberTap = (memberId: string) => {
     const isIncluded = selectedMemberIds.has(memberId);
 
@@ -219,7 +275,12 @@ export function AddExpense() {
       });
       setMemberShares(prev => {
         const next = { ...prev };
-        if (isIncluded) delete next[memberId]; else next[memberId] = 1;
+        if (isIncluded) {
+          delete next[memberId];
+        } else {
+          const rate = group?.members.find(m => m.id === memberId)?.share ?? 1;
+          next[memberId] = rate;
+        }
         return next;
       });
       return;
@@ -357,7 +418,7 @@ export function AddExpense() {
   };
 
   return (
-    <div className="pb-20">
+    <div>
       <h2 className="text-xl font-bold mb-6">Add Transaction</h2>
 
       <form onSubmit={handleSubmit} className="space-y-6">
@@ -546,6 +607,17 @@ export function AddExpense() {
           </div>
 
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={handleToggleAll}
+              className={`px-3 py-1.5 rounded-full text-sm select-none transition-colors ${
+                allMembersSelected
+                  ? 'bg-cyan-700 text-white hover:bg-red-500 font-semibold'
+                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+              }`}
+            >
+              All
+            </button>
             {group.members.map((member) => {
               const isIncluded = includedMemberIds.has(member.id);
               const isYou = currentUser && member.id === currentUser.id;
@@ -578,13 +650,13 @@ export function AddExpense() {
           <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
             <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Total</span>
             <input
-              type="number"
+              type="text" inputMode="decimal"
               min="0"
               value={totalAmount || ''}
               onChange={(e) => {
                 if (splitMode === 'shares') {
                   setHasManualTotal(true);
-                  const parsed = parseFloat(e.target.value);
+                  const parsed = parseDecimal(e.target.value);
                   if (!isNaN(parsed) && parsed >= 0) {
                     setTotalAmount(parsed);
                   } else if (e.target.value === '' || e.target.value === '0') {
@@ -619,12 +691,12 @@ export function AddExpense() {
             <div className="flex items-center bg-gray-800 border border-gray-700 rounded-lg overflow-hidden mt-2">
               <span className="px-3 py-2 text-sm text-gray-500 border-r border-gray-700 whitespace-nowrap">Discount</span>
               <input
-                type="number"
+                type="text" inputMode="decimal"
                 min="0"
                 autoFocus
                 value={discount || ''}
                 onChange={(e) => {
-                  const raw = e.target.value ? parseFloat(e.target.value) : undefined;
+                  const raw = e.target.value ? parseDecimal(e.target.value) : undefined;
                   if (discountType === 'flat') {
                     setDiscount(raw && raw > 0 ? raw : undefined);
                   } else {
@@ -690,7 +762,7 @@ export function AddExpense() {
                   const rawTotal = items.reduce((sum, i) => sum + i.amount, 0);
                   const splitAmount = roundNumber(rawTotal / items.length, 2);
                   handleItemsChange(items.map(item => ({ ...item, amount: splitAmount })));
-                }} className="text-sm text-cyan-400 hover:text-cyan-300">Split equally</button>
+                }} className="text-sm text-cyan-400 hover:text-cyan-300">Split</button>
               )}
             </div>
             <ReceiptItems
@@ -720,7 +792,7 @@ export function AddExpense() {
             <div className="flex justify-between items-center mb-2">
               <label className="block text-sm font-medium text-gray-300">Shares</label>
               <span className="text-sm text-gray-500 italic">
-                {allSharesEqual ? 'All equal' : `Total: ${totalShares} shares`}
+                {allAtDefaultRates ? 'Split' : `Total: ${totalShares} shares`}
               </span>
             </div>
 
@@ -742,15 +814,11 @@ export function AddExpense() {
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-green-400 font-medium">{memberAmount.toLocaleString()}{group.currency}</span>
-                      <div className="flex items-center gap-1">
-                        <button type="button" disabled={share <= 1}
-                          onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: Math.max(1, prev[memberId] - 1) }))}
-                          className="w-7 h-7 flex items-center justify-center bg-gray-700 rounded-md text-white disabled:opacity-40">−</button>
-                        <span className="text-lg font-bold text-white min-w-[22px] text-center">{share}</span>
-                        <button type="button"
-                          onClick={() => setMemberShares(prev => ({ ...prev, [memberId]: prev[memberId] + 1 }))}
-                          className="w-7 h-7 flex items-center justify-center bg-cyan-600 rounded-md text-white">+</button>
-                      </div>
+                      <ShareControl
+                        value={share}
+                        configuredValues={configuredShareValues}
+                        onChange={(v) => setMemberShares(prev => ({ ...prev, [memberId]: v }))}
+                      />
                     </div>
                   </div>
                 );

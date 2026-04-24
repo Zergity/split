@@ -1,17 +1,44 @@
-import { Group, Expense, ApiResponse, ReceiptOCRResult, NotificationRecord, NotifyPrefs } from '../types';
+import {
+  Group,
+  GroupSummary,
+  GroupInvite,
+  Expense,
+  ApiResponse,
+  ReceiptOCRResult,
+  NotificationRecord,
+  NotifyPrefs,
+} from '../types';
 import type { Member } from '../types';
 
 const API_BASE = '/api';
 
+// Active group is held in localStorage so it survives reloads. New sessions
+// default to the legacy 1matrix group — single-group users never need to know
+// groups exist. The AppContext is the canonical reader/writer of this key.
+const ACTIVE_GROUP_KEY = 'splitter.activeGroupId';
+export const LEGACY_GROUP_ID = '1matrix';
+
+export function getActiveGroupId(): string {
+  if (typeof localStorage === 'undefined') return LEGACY_GROUP_ID;
+  return localStorage.getItem(ACTIVE_GROUP_KEY) || LEGACY_GROUP_ID;
+}
+
+export function setActiveGroupId(groupId: string): void {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(ACTIVE_GROUP_KEY, groupId);
+}
+
 async function fetchApi<T>(
   endpoint: string,
-  options?: RequestInit
+  options?: RequestInit & { groupId?: string },
 ): Promise<T> {
+  const { groupId, ...init } = options ?? {};
   const response = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
+    ...init,
     headers: {
       'Content-Type': 'application/json',
-      ...options?.headers,
+      'X-Group-Id': groupId ?? getActiveGroupId(),
+      ...init?.headers,
     },
   });
 
@@ -24,9 +51,25 @@ async function fetchApi<T>(
   return data.data as T;
 }
 
-// Group API
-export async function getGroup(): Promise<Group> {
-  return fetchApi<Group>('/group');
+// --- Groups ---
+
+export async function listGroups(): Promise<GroupSummary[]> {
+  return fetchApi<GroupSummary[]>('/groups');
+}
+
+export async function createGroup(
+  name: string,
+  currency: string,
+  displayName?: string,
+): Promise<Group> {
+  return fetchApi<Group>('/groups', {
+    method: 'POST',
+    body: JSON.stringify({ name, currency, displayName }),
+  });
+}
+
+export async function getGroup(groupId?: string): Promise<Group> {
+  return fetchApi<Group>('/group', groupId ? { groupId } : undefined);
 }
 
 export async function updateGroup(updates: Partial<Group>): Promise<Group> {
@@ -36,13 +79,110 @@ export async function updateGroup(updates: Partial<Group>): Promise<Group> {
   });
 }
 
-// Expenses API
+export async function removeMember(memberId: string): Promise<Group> {
+  return fetchApi<Group>(`/groups/members/${encodeURIComponent(memberId)}`, {
+    method: 'DELETE',
+  });
+}
+
+// Update per-member admin-controlled settings (share for now).
+// Passing `share: null` clears the override back to the implicit 1.
+export async function updateMemberSettings(
+  memberId: string,
+  updates: { share?: number | null },
+): Promise<Group> {
+  return fetchApi<Group>(`/groups/members/${encodeURIComponent(memberId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function updateAdmin(memberId: string, admin: boolean): Promise<Group> {
+  return fetchApi<Group>('/groups/admins', {
+    method: 'PUT',
+    body: JSON.stringify({ memberId, admin }),
+  });
+}
+
+// --- Friends (direct-add candidates) ---
+
+export interface FriendCandidate {
+  userId: string;
+  name: string;
+  groupNames: string[];
+}
+
+export async function listFriends(): Promise<FriendCandidate[]> {
+  return fetchApi<FriendCandidate[]>('/groups/friends');
+}
+
+export async function addFriendToGroup(
+  userId: string,
+  displayName?: string,
+): Promise<Group> {
+  return fetchApi<Group>('/groups/members', {
+    method: 'POST',
+    body: JSON.stringify({ userId, displayName }),
+  });
+}
+
+// --- Invites ---
+
+export async function listInvites(): Promise<GroupInvite[]> {
+  return fetchApi<GroupInvite[]>('/groups/invites');
+}
+
+export async function createInvite(note?: string): Promise<GroupInvite> {
+  return fetchApi<GroupInvite>('/groups/invites', {
+    method: 'POST',
+    body: JSON.stringify({ note }),
+  });
+}
+
+export async function deleteInvite(code: string): Promise<void> {
+  await fetchApi<void>(`/groups/invites/${encodeURIComponent(code)}`, {
+    method: 'DELETE',
+  });
+}
+
+export interface InvitePreview {
+  code: string;
+  groupId: string;
+  groupName: string;
+  memberCount: number;
+}
+
+// Preview is public — no session / no X-Group-Id required.
+export async function previewInvite(code: string): Promise<InvitePreview> {
+  const response = await fetch(`${API_BASE}/groups/invites/${encodeURIComponent(code)}`);
+  const data: ApiResponse<InvitePreview> = await response.json();
+  if (!data.success) throw new Error(data.error || 'Invite not found');
+  return data.data as InvitePreview;
+}
+
+export async function acceptInvite(
+  code: string,
+  displayName?: string,
+): Promise<{ groupId: string; memberId: string; alreadyMember: boolean }> {
+  // Accept is user-scoped but not group-scoped (the invite itself names the target group).
+  // We still send X-Group-Id; the server reads groupId from the invite record.
+  return fetchApi<{ groupId: string; memberId: string; alreadyMember: boolean }>(
+    `/groups/invites/${encodeURIComponent(code)}`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ displayName }),
+    },
+  );
+}
+
+// --- Expenses ---
+
 export async function getExpenses(): Promise<Expense[]> {
   return fetchApi<Expense[]>('/expenses');
 }
 
 export async function createExpense(
-  expense: Omit<Expense, 'id' | 'createdAt'>
+  expense: Omit<Expense, 'id' | 'createdAt'>,
 ): Promise<Expense> {
   return fetchApi<Expense>('/expenses', {
     method: 'POST',
@@ -52,7 +192,7 @@ export async function createExpense(
 
 export async function updateExpense(
   id: string,
-  updates: Partial<Expense>
+  updates: Partial<Expense>,
 ): Promise<Expense> {
   return fetchApi<Expense>(`/expenses/${id}`, {
     method: 'PUT',
@@ -67,9 +207,7 @@ export async function deleteExpense(id: string): Promise<void> {
 }
 
 // Soft delete - mark expense with 'deleted' tag instead of actually deleting
-export async function softDeleteExpense(
-  expense: Expense
-): Promise<Expense> {
+export async function softDeleteExpense(expense: Expense): Promise<Expense> {
   const tags = expense.tags || [];
   if (!tags.includes('deleted')) {
     return updateExpense(expense.id, {
@@ -79,14 +217,15 @@ export async function softDeleteExpense(
   return expense;
 }
 
+// --- Receipt processing ---
 
-// Receipt processing
 export async function processReceipt(file: File): Promise<ReceiptOCRResult> {
   const formData = new FormData();
   formData.append('receipt', file);
 
   const response = await fetch(`${API_BASE}/receipts/process`, {
     method: 'POST',
+    headers: { 'X-Group-Id': getActiveGroupId() },
     body: formData,
   });
 
@@ -102,10 +241,11 @@ export async function processReceipt(file: File): Promise<ReceiptOCRResult> {
   };
 }
 
-// Sign-off helper
+// --- Sign-off helper ---
+
 export async function signOffExpense(
   expense: Expense,
-  memberId: string
+  memberId: string,
 ): Promise<Expense> {
   const updatedSplits = expense.splits.map((split) => {
     if (split.memberId === memberId && !split.signedOff) {
@@ -113,7 +253,7 @@ export async function signOffExpense(
         ...split,
         signedOff: true,
         signedAt: new Date().toISOString(),
-        previousAmount: undefined, // Clear after signing off
+        previousAmount: undefined,
       };
     }
     return split;
@@ -122,7 +262,8 @@ export async function signOffExpense(
   return updateExpense(expense.id, { splits: updatedSplits });
 }
 
-// Profile API
+// --- Profile ---
+
 export async function updateProfile(updates: Partial<Member>): Promise<Member> {
   return fetchApi<Member>('/auth/profile', {
     method: 'PUT',
@@ -130,7 +271,8 @@ export async function updateProfile(updates: Partial<Member>): Promise<Member> {
   });
 }
 
-// Notifications API
+// --- Notifications ---
+
 export async function getNotifications(): Promise<NotificationRecord[]> {
   return fetchApi<NotificationRecord[]>('/notifications');
 }
@@ -139,7 +281,8 @@ export async function markNotificationsRead(): Promise<NotificationRecord[]> {
   return fetchApi<NotificationRecord[]>('/notifications', { method: 'PUT' });
 }
 
-// Push prefs API
+// --- Push prefs ---
+
 export async function getPushPrefs(): Promise<NotifyPrefs> {
   return fetchApi<NotifyPrefs>('/push/prefs');
 }
@@ -151,18 +294,18 @@ export async function updatePushPrefs(prefs: Partial<NotifyPrefs>): Promise<Noti
   });
 }
 
-// Claim/unclaim expense item helper
+// --- Claim/unclaim expense item helper ---
+
 export async function claimExpenseItem(
   expense: Expense,
   itemId: string,
   memberId: string,
-  claim: boolean // true = claim, false = unclaim
+  claim: boolean,
 ): Promise<Expense> {
   if (!expense.items) {
     throw new Error('Expense has no items');
   }
 
-  // Update the item's memberId
   const updatedItems = expense.items.map((item) => {
     if (item.id === itemId) {
       return {
@@ -173,8 +316,6 @@ export async function claimExpenseItem(
     return item;
   });
 
-  // Calculate splits from items
-  // Sum amounts by member
   const memberAmounts = new Map<string, number>();
   let assignedTotal = 0;
 
@@ -186,19 +327,14 @@ export async function claimExpenseItem(
     }
   }
 
-  // Payer takes the remainder (total - assigned items)
   const payerRemainder = expense.amount - assignedTotal;
   const payerAmount = memberAmounts.get(expense.paidBy) || 0;
   memberAmounts.set(expense.paidBy, payerAmount + payerRemainder);
 
-  // Build new splits array
-  // Both claim and unclaim auto-accept for the person taking action and the payer
-  // Expenses with unassigned items go to "Incomplete" list
   const now = new Date().toISOString();
   const updatedSplits: typeof expense.splits = [];
 
   for (const [splitMemberId, amount] of memberAmounts.entries()) {
-    // Skip members with 0 amount (unless they're the payer)
     if (amount === 0 && splitMemberId !== expense.paidBy) {
       continue;
     }
@@ -207,8 +343,6 @@ export async function claimExpenseItem(
     const isPayer = splitMemberId === expense.paidBy;
     const isClaimer = splitMemberId === memberId;
 
-    // Auto-sign for the person taking action and the payer
-    // Others keep their existing status
     let signedOff: boolean;
     let signedAt: string | undefined;
 

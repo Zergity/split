@@ -23,7 +23,7 @@ export const onRequestGet: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    const credentials = await getCredentials(context.env, session.memberId);
+    const credentials = await getCredentials(context.env, session.userId);
 
     const passkeys: PasskeyInfo[] = credentials.map(cred => ({
       id: cred.id,
