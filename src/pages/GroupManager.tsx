@@ -29,15 +29,20 @@ export function GroupManager() {
     }
   }, [routeGroupId, activeGroupId, setActiveGroup]);
 
+  // Only trust the loaded `group` when it matches the URL. During the brief
+  // window between navigating to /groups/:id and the new group loading, `group`
+  // still points at the previous selection; without this guard the admin chrome
+  // from group A would flash on top of group B's URL.
+  const groupMatchesRoute = !!group && (!routeGroupId || group.id === routeGroupId);
   const currentMember = useMemo<Member | null>(() => {
-    if (!group || !session) return null;
+    if (!group || !session || !groupMatchesRoute) return null;
     return (
       group.members.find((m) => m.userId === session.userId) ??
       group.members.find((m) => m.id === session.userId) ??
       null
     );
-  }, [group, session]);
-  const isAdmin = !!currentMember && !!group?.admins.includes(currentMember.id);
+  }, [group, session, groupMatchesRoute]);
+  const isAdmin = !!currentMember && !!group?.admins.includes(currentMember.id) && groupMatchesRoute;
 
   useEffect(() => {
     if (!group || !currentMember) return;
@@ -125,14 +130,16 @@ export function GroupManager() {
   const handleRemoveMember = async (memberId: string) => {
     if (!confirm('Remove this member? Their balances and history stay visible, but they lose access to the group.')) return;
     const updated = await wrap(`remove-${memberId}`, () => api.removeMember(memberId));
-    if (updated) {
-      syncGroupLocal(updated);
-      if (memberId === currentMember.id) {
-        // Left our own group — bounce out to the group list.
-        await refreshGroups();
-        navigate('/groups');
-      }
+    if (!updated) return;
+    if (memberId === currentMember.id) {
+      // Left our own group — skip syncGroupLocal (which would refetch the
+      // just-left group and hit 403/404). Refresh the group list and bounce
+      // out; AppContext picks a new active group from the fresh list.
+      await refreshGroups();
+      navigate('/groups');
+      return;
     }
+    syncGroupLocal(updated);
   };
 
   const handleLeave = () => handleRemoveMember(currentMember.id);
