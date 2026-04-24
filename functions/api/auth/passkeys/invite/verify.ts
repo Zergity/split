@@ -134,10 +134,12 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       }
     );
   } catch (error) {
+    // Log the detailed error server-side; return a generic string so we
+    // don't leak library internals (origin/RPID, CBOR decode failures, etc.)
+    // that would help an attacker probe the deployment.
     console.error('Invite verification error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return Response.json(
-      { success: false, error: `Failed to verify registration: ${errorMessage}` },
+      { success: false, error: 'Failed to verify registration' },
       { status: 500 }
     );
   }
