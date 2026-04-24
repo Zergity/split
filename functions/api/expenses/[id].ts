@@ -1,32 +1,16 @@
 import type { AuthEnv } from '../types/auth';
 import { requireGroup } from '../utils/session';
-import { getExpenses, saveExpenses, GroupRecord, findMember } from '../utils/groups';
+import {
+  getExpenses,
+  saveExpenses,
+  GroupRecord,
+  findMember,
+  memberIdsToUserIds,
+  validateExpenseInput,
+  type Expense,
+} from '../utils/groups';
 import { notifyMembers as notifyPush } from '../utils/web-push';
 import { notifyMembers as notifyTelegram, sendDebouncedEditNotification } from '../utils/telegram';
-
-type SplitType = 'equal' | 'exact' | 'percentage' | 'shares' | 'settlement';
-
-interface ExpenseSplit {
-  memberId: string;
-  value: number;
-  amount: number;
-  signedOff: boolean;
-  signedAt?: string;
-}
-
-interface Expense {
-  id: string;
-  description: string;
-  amount: number;
-  paidBy: string;
-  createdBy?: string;
-  splitType: SplitType;
-  splits: ExpenseSplit[];
-  createdAt: string;
-  receiptUrl?: string;
-  receiptDate?: string;
-  tags?: string[];
-}
 
 function getMemberName(group: GroupRecord, id: string): string {
   return findMember(group, id)?.name ?? id;
@@ -34,15 +18,6 @@ function getMemberName(group: GroupRecord, id: string): string {
 
 function formatAmount(amount: number, currency: string): string {
   return `${amount.toLocaleString('vi-VN')} ${currency}`;
-}
-
-function memberIdsToUserIds(group: GroupRecord, memberIds: string[]): string[] {
-  const out: string[] = [];
-  for (const id of memberIds) {
-    const m = findMember(group, id);
-    if (m?.userId) out.push(m.userId);
-  }
-  return out;
 }
 
 async function sendEditNotification(
@@ -131,13 +106,18 @@ export const onRequestPut: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    expenses[index] = {
+    const merged: Expense = {
       ...expenses[index],
       ...updates,
       id: expenses[index].id,
       createdAt: expenses[index].createdAt,
     };
-    const updatedExpense = expenses[index];
+    const validationError = validateExpenseInput(group, merged);
+    if (validationError) {
+      return Response.json({ success: false, error: validationError }, { status: 400 });
+    }
+    expenses[index] = merged;
+    const updatedExpense = merged;
     await saveExpenses(context.env, group.id, expenses);
 
     const isDeleted = updatedExpense.tags?.includes('deleted');

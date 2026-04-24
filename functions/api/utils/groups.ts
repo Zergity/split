@@ -168,6 +168,31 @@ export function isAdmin(group: GroupRecord, memberId: string): boolean {
 
 // --- Expenses ---
 
+export type SplitType = 'equal' | 'exact' | 'percentage' | 'shares' | 'settlement';
+export const SPLIT_TYPES: SplitType[] = ['equal', 'exact', 'percentage', 'shares', 'settlement'];
+
+export interface ExpenseSplit {
+  memberId: string;
+  value: number;
+  amount: number;
+  signedOff: boolean;
+  signedAt?: string;
+}
+
+export interface Expense {
+  id: string;
+  description: string;
+  amount: number;
+  paidBy: string;
+  createdBy?: string;
+  splitType: SplitType;
+  splits: ExpenseSplit[];
+  createdAt: string;
+  receiptUrl?: string;
+  receiptDate?: string;
+  tags?: string[];
+}
+
 export async function getExpenses(env: AuthEnv, groupId: string): Promise<unknown[]> {
   const data = await env.SPLITTER_KV.get<unknown[]>(expensesKey(groupId), 'json');
   return data ?? [];
@@ -179,6 +204,65 @@ export async function saveExpenses(
   expenses: unknown[],
 ): Promise<void> {
   await env.SPLITTER_KV.put(expensesKey(groupId), JSON.stringify(expenses));
+}
+
+// Resolve member ids to their user ids (for user-scoped notifiers like
+// Telegram). Members without a userId (unclaimed placeholders) are dropped.
+export function memberIdsToUserIds(group: GroupRecord, memberIds: string[]): string[] {
+  const out: string[] = [];
+  for (const id of memberIds) {
+    const m = findMember(group, id);
+    if (m?.userId) out.push(m.userId);
+  }
+  return out;
+}
+
+// Validate untrusted expense input from the client. Returns an error message
+// on failure, or null if valid. Checks: finite non-negative amount, valid
+// splitType, paidBy + every split memberId resolves within the group, and
+// per-split amount is finite/non-negative and reconciles to the total.
+export function validateExpenseInput(
+  group: GroupRecord,
+  input: Partial<Expense>,
+): string | null {
+  if (typeof input.description !== 'string' || input.description.trim() === '') {
+    return 'description is required';
+  }
+  if (!Number.isFinite(input.amount) || (input.amount as number) < 0) {
+    return 'amount must be a non-negative finite number';
+  }
+  if (typeof input.splitType !== 'string' || !SPLIT_TYPES.includes(input.splitType as SplitType)) {
+    return 'splitType is invalid';
+  }
+  if (typeof input.paidBy !== 'string' || !findMember(group, input.paidBy)) {
+    return 'paidBy must reference a member of this group';
+  }
+  if (!Array.isArray(input.splits) || input.splits.length === 0) {
+    return 'splits must be a non-empty array';
+  }
+  let splitSum = 0;
+  for (const split of input.splits) {
+    if (!split || typeof split !== 'object') return 'split entry is invalid';
+    if (typeof split.memberId !== 'string' || !findMember(group, split.memberId)) {
+      return 'split memberId must reference a member of this group';
+    }
+    if (!Number.isFinite(split.amount) || split.amount < 0) {
+      return 'split amount must be a non-negative finite number';
+    }
+    if (!Number.isFinite(split.value)) {
+      return 'split value must be a finite number';
+    }
+    splitSum += split.amount;
+  }
+  // Allow 1-cent rounding per split; settlement rows don't have to reconcile
+  // against the headline amount (it encodes payer/recipient differently).
+  if (input.splitType !== 'settlement') {
+    const tolerance = Math.max(0.01, input.splits.length * 0.01);
+    if (Math.abs(splitSum - (input.amount as number)) > tolerance) {
+      return 'splits do not sum to amount';
+    }
+  }
+  return null;
 }
 
 // --- Group index ---
