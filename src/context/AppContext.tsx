@@ -4,6 +4,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   ReactNode,
 } from 'react';
 import { Group, GroupSummary, Expense, Member } from '../types';
@@ -71,20 +72,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [activeGroupId, setActiveGroup]);
 
+  // Tracks the last refresh we issued, so a response that lands after the
+  // user has switched groups can be discarded instead of applied to state
+  // for the new group. Without this guard, any in-flight refresh (SW event,
+  // visibilitychange, retry) would silently splice stale data in.
+  const refreshTargetRef = useRef<string>(getActiveGroupId());
+
   const refreshData = useCallback(async () => {
+    const targetGroupId = getActiveGroupId();
+    refreshTargetRef.current = targetGroupId;
     try {
       setLoading(true);
       const [groupData, expensesData] = await Promise.all([
-        api.getGroup(),
-        api.getExpenses(),
+        api.getGroup(targetGroupId),
+        api.getExpenses(targetGroupId),
       ]);
+      if (refreshTargetRef.current !== targetGroupId) return;
       setGroup(groupData);
       setExpenses(expensesData);
       setError(null);
     } catch (err) {
+      if (refreshTargetRef.current !== targetGroupId) return;
       setError(err instanceof Error ? err.message : 'Failed to fetch data');
     } finally {
-      setLoading(false);
+      if (refreshTargetRef.current === targetGroupId) setLoading(false);
     }
   }, []);
 
