@@ -28,6 +28,16 @@ export function setActiveGroupId(groupId: string): void {
   localStorage.setItem(ACTIVE_GROUP_KEY, groupId);
 }
 
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 async function fetchApi<T>(
   endpoint: string,
   options?: RequestInit & { groupId?: string },
@@ -45,7 +55,7 @@ async function fetchApi<T>(
   const data: ApiResponse<T> = await response.json();
 
   if (!data.success) {
-    throw new Error(data.error || 'API request failed');
+    throw new ApiError(data.error || 'API request failed', response.status);
   }
 
   return data.data as T;

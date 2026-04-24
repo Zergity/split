@@ -10,7 +10,7 @@ import {
 } from 'react';
 import { Group, GroupSummary, Expense, Member } from '../types';
 import * as api from '../api/client';
-import { LEGACY_GROUP_ID, getActiveGroupId, setActiveGroupId } from '../api/client';
+import { LEGACY_GROUP_ID, getActiveGroupId, setActiveGroupId, ApiError } from '../api/client';
 
 interface AppContextType {
   activeGroupId: string;
@@ -110,7 +110,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setError(null);
     } catch (err) {
       if (refreshTargetRef.current !== targetGroupId) return;
-      setError(err instanceof Error ? err.message : 'Failed to fetch data');
+      // 401 = unauthenticated: let the sign-in UI handle it, not the error screen.
+      if (err instanceof ApiError && err.status === 401) {
+        setError(null);
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to fetch data');
+      }
     } finally {
       if (refreshTargetRef.current === targetGroupId) setLoading(false);
     }
