@@ -94,11 +94,13 @@ export function EditExpense() {
     if (!group) return [1];
     return [...new Set(group.members.map((m) => m.share ?? 1))].sort((a, b) => a - b);
   }, [group]);
-  // "Split" when every member's share equals their configured group share (or 1 if unset).
+  // "Split" when every member's share equals their configured group share
+  // (or 1 if unset). Epsilon compare — share values come from parseDecimal
+  // and may carry float drift (e.g. 0.1 + 0.2), so === would misfire.
   const allAtDefaultRates = Object.entries(memberShares).length > 0 &&
     Object.entries(memberShares).every(([memberId, share]) => {
       const rate = group?.members.find(m => m.id === memberId)?.share ?? 1;
-      return share === rate;
+      return Math.abs(share - rate) < 1e-9;
     });
 
   const includedMemberIds = splitMode === 'items'

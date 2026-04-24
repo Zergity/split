@@ -83,10 +83,12 @@ export function AddExpense() {
     !!group && group.members.length > 0 && selectedMemberIds.size === group.members.length;
   // "Split" when every included member's share equals their configured group
   // share (or 1 if unset) — i.e. nobody has overridden the admin-set weights.
+  // Compare with an epsilon: share values reach here via parseDecimal and may
+  // carry float drift (e.g. 0.1 + 0.2), so a strict === would misfire.
   const allAtDefaultRates = Object.entries(memberShares).length > 0 &&
     Object.entries(memberShares).every(([memberId, share]) => {
       const rate = group?.members.find(m => m.id === memberId)?.share ?? 1;
-      return share === rate;
+      return Math.abs(share - rate) < 1e-9;
     });
 
   const billGoc = useMemo(() => {
