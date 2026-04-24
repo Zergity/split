@@ -102,6 +102,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const addMember = useCallback(
     async (name: string): Promise<Member | null> => {
       if (!group) return null;
+      // This path exists for the legacy 1matrix self-registration flow: the
+      // new user types a name, MemberSelector adds the placeholder, then
+      // /api/auth/register/verify binds a passkey to it. register/verify
+      // only works against the legacy group, so calling addMember in any
+      // other group would leave a dangling placeholder nobody could claim.
+      // Direct-add into a real group goes through api.addFriendToGroup.
+      if (group.id !== LEGACY_GROUP_ID) {
+        throw new Error('Use invite link or direct-add in multi-group mode');
+      }
       const trimmedName = name.trim();
       const newMember: Member = {
         id: crypto.randomUUID(),
@@ -111,6 +120,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         members: [...group.members, newMember],
       });
       setGroup(updated);
+      // The server mints placeholder ids (see /api/group PUT), so we can't
+      // match by the UUID we proposed — fall back to name-based lookup.
       const addedMember = updated.members.find(
         (m) => m.name.toLowerCase() === trimmedName.toLowerCase()
       );
