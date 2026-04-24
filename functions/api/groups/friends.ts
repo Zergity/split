@@ -32,9 +32,13 @@ export const onRequestGet: PagesFunction<AuthEnv> = async (context) => {
     }
     const map = new Map<string, Candidate>();
 
-    for (const mem of memberships) {
-      if (mem.groupId === target.id) continue;
-      const g = await getGroup(context.env, mem.groupId);
+    const otherGroups = await Promise.all(
+      memberships
+        .filter((mem) => mem.groupId !== target.id)
+        .map((mem) => getGroup(context.env, mem.groupId)),
+    );
+
+    for (const g of otherGroups) {
       if (!g) continue;
       for (const member of g.members) {
         if (!member.userId || excluded.has(member.userId)) continue;
