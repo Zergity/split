@@ -121,12 +121,16 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
         joinedAt: existing.joinedAt ?? now,
       };
     }
-    await saveGroup(env, group);
+    // Write membership first so a crashed partial write leaves state that
+    // /api/groups can recover (a stale membership with an unknown memberId
+    // is filtered out; a missing membership would hide the group from the
+    // user who just registered).
     await addMembership(env, userId, {
       groupId: targetGroupId,
       memberId,
       joinedAt: now,
     });
+    await saveGroup(env, group);
 
     const { registrationInfo } = verification;
     const storedCredential: StoredCredential = {

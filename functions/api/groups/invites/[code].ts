@@ -133,12 +133,16 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
         memberName = newMember.name;
       }
 
-      await saveGroup(context.env, group);
+      // Write membership first so a crashed partial write leaves state that
+      // /api/groups can recover by filtering out the stale membership row on
+      // the next read; the reverse order would make the user invisible to
+      // themselves while still consuming a placeholder slot.
       await addMembership(context.env, authed.session.userId, {
         groupId: group.id,
         memberId,
         joinedAt: now,
       });
+      await saveGroup(context.env, group);
 
       return Response.json({
         success: true,
