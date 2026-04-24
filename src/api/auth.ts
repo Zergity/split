@@ -64,12 +64,13 @@ export async function verifyRegistration(
   memberName: string,
   credential: unknown,
   friendlyName?: string,
+  inviteCode?: string,
 ): Promise<SessionInfo> {
   const result = await fetchAuthApi<{ verified: boolean; session: SessionInfo }>(
     '/register/verify',
     {
       method: 'POST',
-      body: JSON.stringify({ memberId, memberName, credential, friendlyName }),
+      body: JSON.stringify({ memberId, memberName, credential, friendlyName, inviteCode }),
     }
   );
   if (!result.session) {

@@ -6,21 +6,30 @@ import { createSession, createAuthCookie } from '../../utils/jwt';
 import {
   LEGACY_GROUP_ID,
   GroupMember,
+  GroupRecord,
   getGroup,
   saveGroup,
 } from '../../utils/groups';
 import { createUser, getUser, addMembership } from '../../utils/users';
+import { getInvite } from '../../utils/invites';
 
-// This endpoint only registers new members into the legacy '1matrix' group
-// (where userId === memberId). Joining any other group goes through the
-// invite-accept flow at /api/groups/invites/:code, which gates on a valid
-// invite code and reuses the caller's existing userId. Accepting a
-// client-supplied groupId here would let an unauthenticated caller bind a
-// passkey to an arbitrary member row in any group.
+// Register a brand-new User and attach them to a group. Two target-group
+// modes:
+//   - no inviteCode: legacy '1matrix' group (memberId === userId invariant).
+//     This is the MemberSelector "New User" flow.
+//   - inviteCode: the invite's group. Registers the new User and joins them
+//     to that group atomically, so a brand-new visitor arriving on an invite
+//     link can create an account and become a member in one round trip.
+// In both cases the caller-supplied `memberId` is treated as the User.id
+// and as the WebAuthn userID (that's what /api/auth/register/options keys
+// the challenge by). Accepting a client-supplied groupId would let an
+// unauthenticated caller bind a passkey to an arbitrary member row in any
+// group — the groupId is always derived from trusted state (legacy hard-
+// code or server-stored invite record).
 export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
   try {
-    const { memberId, memberName, credential, friendlyName } =
-      await context.request.json() as RegisterVerifyRequest;
+    const { memberId, memberName, credential, friendlyName, inviteCode } =
+      await context.request.json() as RegisterVerifyRequest & { inviteCode?: string };
 
     if (!memberId || !memberName || !credential) {
       return Response.json(
@@ -30,10 +39,24 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     }
 
     const env = context.env;
-    const targetGroupId = LEGACY_GROUP_ID;
-
-    // Legacy 1matrix invariant: userId === memberId. See below.
     const userId = memberId;
+
+    // Resolve the target group from trusted state: legacy by default, invite
+    // record when an invite code is supplied. Refuse bad codes early so the
+    // WebAuthn challenge isn't burned on a dead request.
+    let targetGroupId: string;
+    if (inviteCode) {
+      const invite = await getInvite(env, inviteCode);
+      if (!invite) {
+        return Response.json(
+          { success: false, error: 'Invite not found' },
+          { status: 404 }
+        );
+      }
+      targetGroupId = invite.groupId;
+    } else {
+      targetGroupId = LEGACY_GROUP_ID;
+    }
 
     // Refuse to (re)register an identity that already exists. Adding another
     // passkey to an existing account goes through the authenticated
@@ -90,44 +113,27 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
       );
     }
 
-    const existingMemberIdx = group.members.findIndex((m) => m.id === memberId);
     const now = new Date().toISOString();
-    if (existingMemberIdx === -1) {
-      // Fresh legacy-group member — insert. (The caller-side flow creates the
-      // placeholder row via addMember before calling this endpoint, so in
-      // practice the row already exists; guard for the first-member case.)
-      const newMember: GroupMember = {
-        id: memberId,
-        userId,
-        name: memberName,
-        joinedAt: now,
-      };
-      group.members.push(newMember);
-    } else {
-      const existing = group.members[existingMemberIdx];
-      // Refuse to rebind a member row that's already claimed by a different
-      // user. In legacy this can't happen (userId === memberId invariant);
-      // the check is defense-in-depth for stale/promoted data.
-      if (existing.userId && existing.userId !== userId) {
-        return Response.json(
-          { success: false, error: 'Member is already claimed' },
-          { status: 409 }
-        );
-      }
-      group.members[existingMemberIdx] = {
-        ...existing,
-        userId,
-        name: memberName,
-        joinedAt: existing.joinedAt ?? now,
-      };
-    }
+    // Attach the new user to the target group. Legacy keeps the
+    // memberId === userId invariant so the existing row (created by the
+    // MemberSelector pre-flight PUT) is claimed in place. Invite path mints
+    // a fresh memberId unless a placeholder's name matches — same behavior
+    // as POST /api/groups/invites/:code (see that file for rationale).
+    const { memberId: attachedMemberId, conflict } = attachToGroup(
+      group,
+      userId,
+      memberName,
+      { legacy: !inviteCode, clientMemberId: memberId, now },
+    );
+    if (conflict) return conflict;
+
     // Write membership first so a crashed partial write leaves state that
     // /api/groups can recover (a stale membership with an unknown memberId
     // is filtered out; a missing membership would hide the group from the
     // user who just registered).
     await addMembership(env, userId, {
       groupId: targetGroupId,
-      memberId,
+      memberId: attachedMemberId,
       joinedAt: now,
     });
     await saveGroup(env, group);
@@ -177,6 +183,89 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     );
   }
 };
+
+// Mutates `group.members` in place to attach `userId` as a member. Returns
+// the memberId that was claimed/created, or a Response carrying an error
+// the caller should surface.
+//   legacy: the existing row with id === clientMemberId is claimed; if none
+//     exists, insert one (first-member case).
+//   invite: look for a placeholder (userId-less row) whose name matches the
+//     display name; if found claim it in place, otherwise insert a fresh
+//     row with a server-minted memberId and a unique name.
+function attachToGroup(
+  group: GroupRecord,
+  userId: string,
+  memberName: string,
+  opts: { legacy: boolean; clientMemberId: string; now: string },
+): { memberId: string; conflict?: Response } {
+  const { legacy, clientMemberId, now } = opts;
+
+  if (legacy) {
+    const idx = group.members.findIndex((m) => m.id === clientMemberId);
+    if (idx === -1) {
+      const newMember: GroupMember = {
+        id: clientMemberId,
+        userId,
+        name: memberName,
+        joinedAt: now,
+      };
+      group.members.push(newMember);
+      return { memberId: clientMemberId };
+    }
+    const existing = group.members[idx];
+    // Refuse to rebind a member row that's already claimed by a different
+    // user. In legacy this can't happen (userId === memberId invariant);
+    // the check is defense-in-depth for stale/promoted data.
+    if (existing.userId && existing.userId !== userId) {
+      return {
+        memberId: clientMemberId,
+        conflict: Response.json(
+          { success: false, error: 'Member is already claimed' },
+          { status: 409 },
+        ),
+      };
+    }
+    group.members[idx] = {
+      ...existing,
+      userId,
+      name: memberName,
+      joinedAt: existing.joinedAt ?? now,
+    };
+    return { memberId: clientMemberId };
+  }
+
+  // Invite flow: claim placeholder by normalized name if one matches —
+  // preserves admin-seeded attributions instead of creating a duplicate.
+  const normalized = memberName.trim().toLowerCase();
+  const placeholderIdx = group.members.findIndex(
+    (m) => !m.userId && m.name.trim().toLowerCase() === normalized,
+  );
+  if (placeholderIdx !== -1) {
+    const placeholder = group.members[placeholderIdx];
+    group.members[placeholderIdx] = {
+      ...placeholder,
+      userId,
+      joinedAt: placeholder.joinedAt ?? now,
+    };
+    return { memberId: placeholder.id };
+  }
+
+  // Disambiguate display name against existing members.
+  let uniqueName = memberName;
+  const taken = new Set(group.members.map((m) => m.name.toLowerCase()));
+  let suffix = 2;
+  while (taken.has(uniqueName.toLowerCase())) {
+    uniqueName = `${memberName} ${suffix++}`;
+  }
+  const newMember: GroupMember = {
+    id: crypto.randomUUID(),
+    userId,
+    name: uniqueName,
+    joinedAt: now,
+  };
+  group.members.push(newMember);
+  return { memberId: newMember.id };
+}
 
 function getDefaultFriendlyName(request: Request): string {
   const userAgent = request.headers.get('User-Agent') || '';

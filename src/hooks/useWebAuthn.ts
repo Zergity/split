@@ -15,7 +15,12 @@ interface WebAuthnState {
 
 interface UseWebAuthnReturn extends WebAuthnState {
   isSupported: boolean;
-  register: (memberId: string, memberName: string, friendlyName?: string) => Promise<SessionInfo>;
+  register: (
+    memberId: string,
+    memberName: string,
+    friendlyName?: string,
+    inviteCode?: string,
+  ) => Promise<SessionInfo>;
   authenticate: () => Promise<SessionInfo>;
   linkPasskey: (friendlyName?: string) => Promise<void>;
   createPasskeyInvite: () => Promise<PasskeyInviteInfo>;
@@ -32,7 +37,8 @@ export function useWebAuthn(): UseWebAuthnReturn {
   const register = useCallback(async (
     memberId: string,
     memberName: string,
-    friendlyName?: string
+    friendlyName?: string,
+    inviteCode?: string,
   ): Promise<SessionInfo> => {
     setLoading(true);
     setError(null);
@@ -44,12 +50,15 @@ export function useWebAuthn(): UseWebAuthnReturn {
       // Start WebAuthn registration (shows biometric prompt)
       const credential = await startRegistration({ optionsJSON: options });
 
-      // Verify with server and get session
+      // Verify with server and get session. An invite code, when provided,
+      // routes the registration to the invite's group instead of legacy —
+      // creating the User and joining the group in one round trip.
       const session = await authApi.verifyRegistration(
         memberId,
         memberName,
         credential,
-        friendlyName
+        friendlyName,
+        inviteCode,
       );
 
       return session;

@@ -8,7 +8,12 @@ interface AuthContextType extends AuthState {
   isSupported: boolean;
   webAuthnLoading: boolean;
   webAuthnError: string | null;
-  register: (memberId: string, memberName: string, friendlyName?: string) => Promise<SessionInfo>;
+  register: (
+    memberId: string,
+    memberName: string,
+    friendlyName?: string,
+    inviteCode?: string,
+  ) => Promise<SessionInfo>;
   authenticate: () => Promise<SessionInfo>;
   linkPasskey: (friendlyName?: string) => Promise<void>;
   createPasskeyInvite: () => Promise<PasskeyInviteInfo>;
@@ -28,8 +33,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const webAuthn = useWebAuthn();
 
   // Wrap register to also update auth state
-  const register = async (memberId: string, memberName: string, friendlyName?: string): Promise<SessionInfo> => {
-    const session = await webAuthn.register(memberId, memberName, friendlyName);
+  const register = async (
+    memberId: string,
+    memberName: string,
+    friendlyName?: string,
+    inviteCode?: string,
+  ): Promise<SessionInfo> => {
+    const session = await webAuthn.register(memberId, memberName, friendlyName, inviteCode);
     auth.setSession(session);
     return session;
   };

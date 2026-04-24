@@ -26,6 +26,7 @@ export function AcceptInvite() {
     session,
     acceptPasskeyInvite,
     authenticate,
+    register,
     webAuthnLoading,
     webAuthnError,
     clearWebAuthnError,
@@ -93,6 +94,48 @@ export function AcceptInvite() {
       setPageError(err instanceof Error ? err.message : 'Failed to join group');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // --- Group invite: register new account AND join in one step ---
+  const handleRegisterAndJoin = async () => {
+    if (!code || invite.kind !== 'group') return;
+    const name = displayName.trim();
+    if (!name) {
+      setPageError('Please enter a name');
+      return;
+    }
+    clearWebAuthnError();
+    setPageError(null);
+    setSubmitting(true);
+    try {
+      // Client-minted id becomes both the User.id and WebAuthn userID. The
+      // server derives the target group from the invite record (never from
+      // the client), and mints a fresh memberId for the group row.
+      const userId = crypto.randomUUID();
+      await register(userId, name, undefined, code);
+      setActiveGroup(invite.preview.groupId);
+      await Promise.all([refreshGroups(), refreshData()]);
+      setSuccess('group');
+      setTimeout(() => navigate('/'), 1200);
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : 'Failed to create account');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // --- Group invite: sign in with existing passkey, then accept ---
+  const handleSignInAndJoin = async () => {
+    if (!code || invite.kind !== 'group') return;
+    clearWebAuthnError();
+    setPageError(null);
+    try {
+      await authenticate();
+      // After sign-in, useEffect re-renders with the authenticated branch
+      // and the user clicks "Join group" from there.
+    } catch (err) {
+      setPageError(err instanceof Error ? err.message : 'Failed to sign in');
     }
   };
 
@@ -172,21 +215,51 @@ export function AcceptInvite() {
 
     if (!authenticated) {
       return (
-        <div className="max-w-md mx-auto mt-12 bg-gray-800 rounded-xl p-6 border border-gray-700 text-center">
-          <h2 className="text-xl font-semibold text-gray-100 mb-2">Join {preview.groupName}</h2>
-          <p className="text-sm text-gray-400 mb-4">
+        <div className="max-w-md mx-auto mt-8 bg-gray-800 rounded-xl p-6 border border-gray-700">
+          <h2 className="text-xl font-semibold text-gray-100 mb-1">Join {preview.groupName}</h2>
+          <p className="text-sm text-gray-400 mb-6">
             {preview.memberCount} member{preview.memberCount === 1 ? '' : 's'} are already in this group.
           </p>
-          <p className="text-sm text-gray-400 mb-6">
-            Sign in (or create an account) first, then come back to this link to join.
+
+          <label className="block text-sm text-gray-300 mb-1">Your display name</label>
+          <input
+            type="text"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleRegisterAndJoin()}
+            placeholder="Your name"
+            className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-gray-100 mb-2"
+            autoFocus
+            disabled={submitting || webAuthnLoading}
+          />
+          <p className="text-xs text-gray-500 mb-6">
+            We'll create an account with a passkey on this device.
           </p>
-          <p className="text-xs text-gray-500 mb-4">Use the Sign In / New User buttons in the top-right.</p>
+
+          {(pageError || webAuthnError) && (
+            <div className="mb-4 p-3 bg-red-900/30 border border-red-700 rounded-lg">
+              <p className="text-sm text-red-300">{pageError || webAuthnError}</p>
+            </div>
+          )}
+
           <button
-            onClick={() => navigate('/')}
-            className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg"
+            onClick={handleRegisterAndJoin}
+            disabled={submitting || webAuthnLoading || !displayName.trim()}
+            className="w-full py-2.5 bg-cyan-600 hover:bg-cyan-700 disabled:opacity-50 text-white rounded-lg font-medium mb-3"
           >
-            Go to sign-in
+            {submitting || webAuthnLoading ? 'Creating account…' : 'Create account & join'}
           </button>
+
+          <div className="text-center text-sm text-gray-400">
+            Already have an account?{' '}
+            <button
+              onClick={handleSignInAndJoin}
+              disabled={webAuthnLoading}
+              className="text-cyan-400 hover:text-cyan-300 font-medium disabled:opacity-50"
+            >
+              Sign in
+            </button>
+          </div>
         </div>
       );
     }
