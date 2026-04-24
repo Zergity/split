@@ -1,6 +1,6 @@
 {
-  "name": "1Matrix - Expense Splitter",
-  "short_name": "1Matrix",
+  "name": "Split",
+  "short_name": "Split",
   "description": "Split expenses with your group",
   "start_url": "/",
   "display": "standalone",

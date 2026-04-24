@@ -48,7 +48,7 @@ export const onRequestPost: PagesFunction<AuthEnv> = async (context) => {
     const existingCredentials = await getCredentials(env, userId);
 
     const options = await generateRegistrationOptions({
-      rpName: env.RP_NAME || 'Splitter',
+      rpName: env.RP_NAME || 'Split',
       rpID: env.RP_ID || 'localhost',
       userName,
       userID: new TextEncoder().encode(userId),
