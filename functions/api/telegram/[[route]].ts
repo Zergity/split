@@ -137,11 +137,20 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       await env.SPLITTER_KV.delete(KV_KEYS.telegram(existingUserId));
     }
 
-    // Also clean up if this user was previously linked to a different Telegram chat
+    // Detect a rebind: the user previously linked a different chat. We must
+    // order the writes so that at no point does the stale-entry cleanup in
+    // sendTelegramNotification (which deletes telegram(userId) when the
+    // forward mapping doesn't match) observe a half-migrated state that
+    // could wipe the freshly-connected chat.
+    //
+    // Order:
+    //   1) put telegramChatId(NEW_chatId) → userId   (forward mapping in place)
+    //   2) put telegram(userId) → NEW data            (reverse mapping updated)
+    //   3) delete telegramChatId(OLD_chatId)          (kill the stale forward)
+    // Between 1 and 2 a concurrent sender still reads the OLD reverse, whose
+    // OLD forward is still live — the worst case is a notification to the
+    // old chat, never data loss.
     const existingData = await env.SPLITTER_KV.get<TelegramData>(KV_KEYS.telegram(connectData.userId), 'json');
-    if (existingData && existingData.chatId !== chatId) {
-      await env.SPLITTER_KV.delete(KV_KEYS.telegramChatId(existingData.chatId));
-    }
 
     const telegramData: TelegramData = {
       chatId,
@@ -149,8 +158,11 @@ async function handleWebhook(request: Request, env: Env): Promise<Response> {
       connectedAt: new Date().toISOString(),
       notifyPrefs: DEFAULT_NOTIFY_PREFS,
     };
-    await env.SPLITTER_KV.put(KV_KEYS.telegram(connectData.userId), JSON.stringify(telegramData));
     await env.SPLITTER_KV.put(KV_KEYS.telegramChatId(chatId), connectData.userId);
+    await env.SPLITTER_KV.put(KV_KEYS.telegram(connectData.userId), JSON.stringify(telegramData));
+    if (existingData && existingData.chatId !== chatId) {
+      await env.SPLITTER_KV.delete(KV_KEYS.telegramChatId(existingData.chatId));
+    }
     await env.SPLITTER_KV.delete(KV_KEYS.telegramConnect(token));
 
     // Show the user's first-group display name in the confirmation for a personal touch.
