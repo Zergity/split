@@ -112,27 +112,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refreshData = useCallback(async () => {
     const targetGroupId = getActiveGroupId();
     refreshTargetRef.current = targetGroupId;
-    try {
-      setLoading(true);
-      const [groupData, expensesData] = await Promise.all([
-        api.getGroup(targetGroupId),
-        api.getExpenses(targetGroupId),
-      ]);
-      if (refreshTargetRef.current !== targetGroupId) return;
-      setGroup(groupData);
-      setExpenses(expensesData);
-      setError(null);
-    } catch (err) {
-      if (refreshTargetRef.current !== targetGroupId) return;
-      // 401 = unauthenticated: let the sign-in UI handle it, not the error screen.
-      if (err instanceof ApiError && err.status === 401) {
-        setError(null);
-      } else {
-        setError(err instanceof Error ? err.message : 'Failed to fetch data');
-      }
-    } finally {
-      if (refreshTargetRef.current === targetGroupId) setLoading(false);
+    setLoading(true);
+    // Settle independently so a 401 on expenses (unauthenticated caller)
+    // doesn't block the group from loading. The legacy group is readable
+    // without a session for the self-registration bootstrap, but expenses
+    // are still private — MemberSelector only needs the member list to
+    // let the new user pick a name.
+    const [groupRes, expensesRes] = await Promise.allSettled([
+      api.getGroup(targetGroupId),
+      api.getExpenses(targetGroupId),
+    ]);
+    if (refreshTargetRef.current !== targetGroupId) {
+      setLoading(false);
+      return;
     }
+
+    let firstError: unknown = null;
+    if (groupRes.status === 'fulfilled') {
+      setGroup(groupRes.value);
+    } else {
+      firstError = groupRes.reason;
+    }
+    if (expensesRes.status === 'fulfilled') {
+      setExpenses(expensesRes.value);
+    } else if (!firstError) {
+      firstError = expensesRes.reason;
+    }
+
+    if (!firstError) {
+      setError(null);
+    } else if (firstError instanceof ApiError && firstError.status === 401) {
+      // Unauthenticated: let the sign-in UI handle it, not the error screen.
+      setError(null);
+    } else {
+      setError(firstError instanceof Error ? firstError.message : 'Failed to fetch data');
+    }
+    setLoading(false);
   }, []);
 
   const addMember = useCallback(

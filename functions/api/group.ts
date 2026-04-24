@@ -9,8 +9,23 @@ import {
 } from './utils/groups';
 
 // GET /api/group — return the active group (scoped by X-Group-Id header).
+// The legacy group is readable without a session so the self-registration
+// bootstrap (MemberSelector → addMember → /api/auth/register/verify) can
+// load the existing member list before the user has a passkey. Every other
+// group still requires membership.
 export const onRequestGet: PagesFunction<AuthEnv> = async (context) => {
   try {
+    const groupId = extractGroupId(context.request);
+    if (groupId === LEGACY_GROUP_ID) {
+      const group = await getGroup(context.env, groupId);
+      if (!group) {
+        return Response.json(
+          { success: false, error: 'Group not found' },
+          { status: 404 }
+        );
+      }
+      return Response.json({ success: true, data: group });
+    }
     const ctx = await requireGroup(context.env, context.request);
     if (ctx instanceof Response) return ctx;
     return Response.json({ success: true, data: ctx.group });
