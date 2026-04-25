@@ -24,7 +24,7 @@ export function ExpenseCard({
   onDelete,
   initialExpanded = false,
 }: ExpenseCardProps) {
-  const { currentUser, updateExpense, claimExpenseItem, deleteExpense, tagsByFrequency } = useApp();
+  const { group, currentUser, updateExpense, claimExpenseItem, deleteExpense, tagsByFrequency } = useApp();
 
   // Tag suggestions: the group-wide frequency-sorted list (memoized in the
   // provider so it's computed once per expenses update, not once per card),
@@ -101,15 +101,19 @@ export function ExpenseCard({
     ? expense.splits.find((s) => s.memberId === currentUser.id)
     : null;
 
-  // Payer can edit/delete, creator can also edit (to assign items)
+  // Payer can edit/delete, creator can edit (to assign items), participants
+  // can edit (to claim/sign their share), and group admins can edit/delete
+  // anything in the group — admin edits force re-acceptance from payer +
+  // participants (handled in EditExpense).
   const isPayer = currentUser && currentUser.id === expense.paidBy;
   const isCreator = currentUser && currentUser.id === expense.createdBy;
   const isParticipantInSplits = currentUser && expense.splits.some(s => s.memberId === currentUser.id);
   const isParticipantInItems = currentUser && expense.items?.some(item => item.memberId === currentUser.id);
   const isParticipant = isPayer || isCreator || isParticipantInSplits || isParticipantInItems;
-  const canEdit = isParticipant;
-  const canDelete = isPayer; // Only payer can delete
-  const canEditTags = isParticipant;
+  const isAdmin = !!(currentUser && group?.admins.includes(currentUser.id));
+  const canEdit = isParticipant || isAdmin;
+  const canDelete = isPayer || isAdmin;
+  const canEditTags = isParticipant || isAdmin;
 
   return (
     <div className={`bg-gray-800 rounded-lg shadow-sm border ${isSettlement ? 'border-green-700' : 'border-gray-700'} p-4 ${expenseDeleted ? 'opacity-60' : ''}`}>
@@ -151,7 +155,13 @@ export function ExpenseCard({
                     to={`/edit/${expense.id}`}
                     className="text-cyan-400 text-xs hover:text-cyan-300"
                   >
-                    {isPayer ? 'Edit as Payer' : isCreator ? 'Edit as Creator' : 'Edit as Participant'}
+                    {isPayer
+                      ? 'Edit as Payer'
+                      : isCreator
+                        ? 'Edit as Creator'
+                        : isParticipant
+                          ? 'Edit as Participant'
+                          : 'Edit as Admin'}
                   </Link>
                 )}
               </div>

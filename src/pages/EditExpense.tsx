@@ -68,13 +68,24 @@ export function EditExpense() {
     }
   }, [expense, group]);
 
-  // Payer can fully edit, creator can only assign unassigned items, participant can edit own items
+  // Payer can fully edit, creator can only assign unassigned items,
+  // participant can edit own items, group admin can edit anything but
+  // their structural change re-opens acceptance for the payer + all
+  // other participants (the admin auto-accepts only their own row).
   const isPayer = !!(currentUser && expense && currentUser.id === expense.paidBy);
   const isCreator = !!(currentUser && expense && currentUser.id === expense.createdBy);
   const isParticipant = !!(currentUser && expense && expense.items?.some(item => item.memberId === currentUser.id));
-  const canEdit = isPayer || isCreator || isParticipant;
-  const canOnlyAssign = isCreator && !isPayer;
-  const canOnlyEditOwnItems = isParticipant && !isPayer && !isCreator;
+  const isAdmin = !!(currentUser && group?.admins.includes(currentUser.id));
+  const canEdit = isPayer || isCreator || isParticipant || isAdmin;
+  // Admin overrides the narrow creator/participant restrictions —
+  // an admin who is neither payer nor creator nor participant can
+  // still edit the whole transaction.
+  const canOnlyAssign = !isAdmin && isCreator && !isPayer;
+  const canOnlyEditOwnItems = !isAdmin && isParticipant && !isPayer && !isCreator;
+  // Admin (acting in admin capacity, i.e. not also the payer) edits
+  // void the existing sign-off ledger so the payer + participants must
+  // re-accept the new amounts.
+  const adminWipeAcceptance = isAdmin && !isPayer;
 
   const billGoc = useMemo(() => {
     if (splitMode !== 'items') return totalAmount;
@@ -367,9 +378,13 @@ export function EditExpense() {
     setSubmitting(true);
 
     try {
+      const now = new Date().toISOString();
       if (splitMode === 'group') {
-        // Group-mode edits never touch splits (they're computed on read) or
-        // the sign-off ledger (member acceptance is independent of edits).
+        // Group-mode persists no splits (computed on read). Member acceptance
+        // lives in `signedOffBy`. By default an edit doesn't touch the ledger
+        // — but an admin (acting in admin capacity) editing the transaction
+        // resets it so participants re-accept; the admin auto-signs only
+        // their own entry.
         await updateExpense(expense.id, {
           description: description.trim(),
           amount: totalAmount,
@@ -377,47 +392,66 @@ export function EditExpense() {
           splitType: 'group',
           splits: [],
           receiptDate: receiptDate || undefined,
+          ...(adminWipeAcceptance
+            ? { signedOffBy: currentUser ? [{ memberId: currentUser.id, signedAt: now }] : [] }
+            : {}),
         });
         navigate('/expenses');
         return;
       }
+      // Build a single split row honoring the editor's role:
+      //   - admin (not payer): force re-acceptance from the payer + every
+      //     participant; admin auto-signs only their own row.
+      //   - payer/creator: payer auto-signs, others reset only when their
+      //     amount changed.
+      const buildSplit = (
+        memberId: string,
+        value: number,
+        amount: number,
+        oldSplit: { amount: number; signedOff: boolean; signedAt?: string; previousAmount?: number } | undefined,
+      ) => {
+        if (adminWipeAcceptance) {
+          const isSelf = memberId === currentUser?.id;
+          const amountChanged = !!oldSplit && Math.abs(oldSplit.amount - amount) > 0.01;
+          return {
+            memberId,
+            value,
+            amount,
+            signedOff: isSelf,
+            signedAt: isSelf ? now : undefined,
+            previousAmount: amountChanged ? oldSplit.amount : undefined,
+          };
+        }
+        if (memberId === paidBy) {
+          return { memberId, value, amount, signedOff: true, signedAt: now };
+        }
+        if (!oldSplit || Math.abs(oldSplit.amount - amount) > 0.01) {
+          return {
+            memberId,
+            value,
+            amount,
+            signedOff: false,
+            signedAt: undefined,
+            previousAmount: oldSplit?.amount,
+          };
+        }
+        return {
+          memberId,
+          value,
+          amount,
+          signedOff: oldSplit.signedOff,
+          signedAt: oldSplit.signedAt,
+          previousAmount: oldSplit.previousAmount,
+        };
+      };
+
       if (splitMode === 'items') {
         const memberTotals = calculateSplits();
         const oldSplitsMap = new Map(expense.splits.map((s) => [s.memberId, s]));
 
-        const splits = Array.from(memberTotals.entries()).map(([memberId, amount]) => {
-          const oldSplit = oldSplitsMap.get(memberId);
-
-          if (memberId === paidBy) {
-            return {
-              memberId,
-              value: amount,
-              amount,
-              signedOff: true,
-              signedAt: new Date().toISOString(),
-            };
-          }
-
-          if (!oldSplit || Math.abs(oldSplit.amount - amount) > 0.01) {
-            return {
-              memberId,
-              value: amount,
-              amount,
-              signedOff: false,
-              signedAt: undefined,
-              previousAmount: oldSplit?.amount,
-            };
-          }
-
-          return {
-            memberId,
-            value: amount,
-            amount,
-            signedOff: oldSplit.signedOff,
-            signedAt: oldSplit.signedAt,
-            previousAmount: oldSplit.previousAmount,
-          };
-        });
+        const splits = Array.from(memberTotals.entries()).map(([memberId, amount]) =>
+          buildSplit(memberId, amount, amount, oldSplitsMap.get(memberId)),
+        );
 
         await updateExpense(expense.id, {
           description: description.trim(),
@@ -437,37 +471,7 @@ export function EditExpense() {
         const distributed = distributeByShares(totalAmount, sharesEntries, 2);
         const splits = sharesEntries.map(([memberId, share]) => {
           const amount = distributed.get(memberId) ?? 0;
-          const oldSplit = oldSplitsMap.get(memberId);
-
-          if (memberId === paidBy) {
-            return {
-              memberId,
-              value: share,
-              amount,
-              signedOff: true,
-              signedAt: new Date().toISOString(),
-            };
-          }
-
-          if (!oldSplit || Math.abs(oldSplit.amount - amount) > 0.01) {
-            return {
-              memberId,
-              value: share,
-              amount,
-              signedOff: false,
-              signedAt: undefined,
-              previousAmount: oldSplit?.amount,
-            };
-          }
-
-          return {
-            memberId,
-            value: share,
-            amount,
-            signedOff: oldSplit.signedOff,
-            signedAt: oldSplit.signedAt,
-            previousAmount: oldSplit.previousAmount,
-          };
+          return buildSplit(memberId, share, amount, oldSplitsMap.get(memberId));
         });
 
         await updateExpense(expense.id, {
@@ -491,7 +495,14 @@ export function EditExpense() {
   return (
     <div>
       <h2 className="text-xl font-bold mb-6">
-        Edit Transaction {isPayer ? '(as Payer)' : isCreator ? '(as Creator)' : '(as Participant)'}
+        Edit Transaction{' '}
+        {isPayer
+          ? '(as Payer)'
+          : isCreator
+            ? '(as Creator)'
+            : isAdmin
+              ? '(as Admin)'
+              : '(as Participant)'}
       </h2>
 
       {canOnlyEditOwnItems ? (
@@ -501,6 +512,10 @@ export function EditExpense() {
       ) : canOnlyAssign ? (
         <div className="bg-blue-900/30 border border-blue-700 text-blue-200 px-4 py-3 rounded-lg mb-6 text-sm">
           You can edit description and assign members to unassigned items.
+        </div>
+      ) : adminWipeAcceptance ? (
+        <div className="bg-yellow-900/30 border border-yellow-700 text-yellow-200 px-4 py-3 rounded-lg mb-6 text-sm">
+          Saving will reset acceptance — the payer and every participant will need to accept the new amounts.
         </div>
       ) : (
         <div className="bg-yellow-900/30 border border-yellow-700 text-yellow-200 px-4 py-3 rounded-lg mb-6 text-sm">
