@@ -122,6 +122,20 @@ export function AddExpense() {
     }
   };
 
+  // The Total field holds the amount actually paid = subtotal − discount, so
+  // expense.amount (= Total) always equals the sum of the discounted splits.
+  // handleItemsChange keeps it in sync on item edits; this mirrors that for
+  // when the discount value or unit changes (or is cleared). Skips when the
+  // user has manually overridden the Total.
+  const syncTotalToDiscount = (nextDiscount: number | undefined, nextType: DiscountType) => {
+    if (hasManualTotal || items.length === 0) return;
+    const subtotal = items.reduce((sum, i) => sum + i.amount, 0);
+    const discAmt = nextType === 'flat'
+      ? (nextDiscount ?? 0)
+      : subtotal * ((nextDiscount ?? 0) / 100);
+    setTotalAmount(Math.max(0, roundNumber(subtotal - discAmt, 2)));
+  };
+
   const handleTotalChange = (value: string) => {
     setHasManualTotal(true);
     const parsed = parseDecimal(value);
@@ -384,17 +398,13 @@ export function AddExpense() {
           }
         }
 
-        // True the payer up to the amount actually paid (Total minus the
-        // discount), NOT the pre-discount Total. The loop above already lowered
-        // every item by its proportional share of the discount; trueing up to
-        // the full Total would add that whole discount straight back onto the
-        // payer as a surcharge, so the payer ends up eating the discount while
-        // everyone else pockets it. splitDiscountAmount is 0 when there's no
-        // discount, so tax/tip-style manual totals are unaffected.
-        const targetTotal = roundNumber(totalAmount - splitDiscountAmount, 2);
-        if (paidBy && targetTotal > 0) {
+        // Payer absorbs the rounding remainder so the splits sum exactly to the
+        // Total (= amount actually paid). totalAmount is kept at subtotal −
+        // discount (see the discount/items handlers), so the items above —
+        // already discounted proportionally — sum to it and this diff is ~0.
+        if (paidBy && totalAmount > 0) {
           const currentItemsSum = Array.from(memberTotals.values()).reduce((sum, v) => sum + v, 0);
-          const diff = roundNumber(targetTotal - currentItemsSum, 2);
+          const diff = roundNumber(totalAmount - currentItemsSum, 2);
           if (Math.abs(diff) > 0.001) {
             const payerCurrent = memberTotals.get(paidBy) || 0;
             memberTotals.set(paidBy, roundNumber(payerCurrent + diff, 2));
@@ -742,18 +752,22 @@ export function AddExpense() {
                 onChange={(e) => {
                   const sanitized = sanitizeDecimalInput(e.target.value);
                   const raw = sanitized ? parseDecimal(sanitized) : undefined;
-                  if (discountType === 'flat') {
-                    setDiscount(raw && raw > 0 ? raw : undefined);
-                  } else {
-                    setDiscount(raw && raw > 0 && raw <= 100 ? raw : undefined);
-                  }
+                  const next = discountType === 'flat'
+                    ? (raw && raw > 0 ? raw : undefined)
+                    : (raw && raw > 0 && raw <= 100 ? raw : undefined);
+                  setDiscount(next);
+                  syncTotalToDiscount(next, discountType);
                 }}
                 placeholder="0"
                 className="flex-1 min-w-0 bg-transparent px-3 py-2 text-right text-sm text-gray-100"
               />
               <select
                 value={discountType}
-                onChange={(e) => setDiscountType(e.target.value as DiscountType)}
+                onChange={(e) => {
+                  const nextType = e.target.value as DiscountType;
+                  setDiscountType(nextType);
+                  syncTotalToDiscount(discount, nextType);
+                }}
                 className="flex-shrink-0 bg-gray-800 border-l border-gray-700 px-2 py-2 text-gray-100 text-sm"
               >
                 <option value="percentage">%</option>
@@ -761,7 +775,7 @@ export function AddExpense() {
               </select>
               <button
                 type="button"
-                onClick={() => { setDiscount(undefined); setShowDiscountInput(false); }}
+                onClick={() => { setDiscount(undefined); setShowDiscountInput(false); syncTotalToDiscount(undefined, discountType); }}
                 className="px-2 py-2 text-gray-600 hover:text-red-400 text-sm"
               >
                 ×
