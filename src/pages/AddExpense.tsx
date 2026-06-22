@@ -741,12 +741,12 @@ export function AddExpense() {
                   }
                 }}
                 placeholder="0"
-                className="flex-1 bg-transparent px-3 py-2 text-right text-sm text-gray-100"
+                className="flex-1 min-w-0 bg-transparent px-3 py-2 text-right text-sm text-gray-100"
               />
               <select
                 value={discountType}
                 onChange={(e) => setDiscountType(e.target.value as DiscountType)}
-                className="bg-gray-800 border-l border-gray-700 px-2 py-2 text-gray-100 text-sm"
+                className="flex-shrink-0 bg-gray-800 border-l border-gray-700 px-2 py-2 text-gray-100 text-sm"
               >
                 <option value="percentage">%</option>
                 <option value="flat">K</option>
