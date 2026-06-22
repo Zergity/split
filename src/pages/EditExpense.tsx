@@ -138,9 +138,17 @@ export function EditExpense() {
       }
     }
 
-    if (paidBy && totalAmount > 0) {
+    // True the payer up to the amount actually paid (Total minus the discount),
+    // NOT the pre-discount Total. The loop above already lowered every item by
+    // its proportional share of the discount; trueing up to the full Total would
+    // add that whole discount straight back onto the payer as a surcharge, so
+    // the payer ends up eating the discount while everyone else pockets it.
+    // splitDiscountAmount is 0 when there's no discount, so tax/tip-style manual
+    // totals are unaffected.
+    const targetTotal = roundNumber(totalAmount - splitDiscountAmount, 2);
+    if (paidBy && targetTotal > 0) {
       const currentItemsSum = Array.from(memberTotals.values()).reduce((sum, v) => sum + v, 0);
-      const diff = roundNumber(totalAmount - currentItemsSum, 2);
+      const diff = roundNumber(targetTotal - currentItemsSum, 2);
       if (Math.abs(diff) > 0.001) {
         const payerCurrent = memberTotals.get(paidBy) || 0;
         memberTotals.set(paidBy, roundNumber(payerCurrent + diff, 2));
