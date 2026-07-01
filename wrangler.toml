@@ -19,5 +19,9 @@ RP_ORIGIN = "https://split.vietcha.in"
 VAPID_PUBLIC_KEY = "BFaLpuZ_l3_uTnclgsBlfvBp25lsGUNQInBSu0ilHI-osHjghf-RlLatMh7Xlz-DexkDqHQZUulz19OQqjuFkcc"
 VAPID_SUBJECT = "mailto:admin@split.vietcha.in"
 
+# App-wide admins (comma-separated userIds). Grants cross-group privileges such
+# as recovering any member's passkey. Currently: "TA".
+APP_ADMIN_USER_IDS = "146580ad-5c20-4f0b-9c35-ffd3b6180340"
+
 [ai]
 binding = "AI"
